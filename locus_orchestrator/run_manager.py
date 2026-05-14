@@ -6,7 +6,9 @@ import time
 from dataclasses import dataclass
 
 from locus_core import paths
-from locus_core.protocol import ArtifactCryptoPolicy, ArtifactRef, GraphRef, JobManifestV3, MinerIdentity, VerificationPolicy, WorkerIdentity
+from locus_core.protocol import ArtifactCryptoPolicy, ArtifactRef, AssignmentGrantV3, EncryptedAssignmentGrantV3, GraphRef, JobManifestV3, MinerIdentity, VerificationPolicy, WorkerIdentity
+from locus_core.wallet_crypto import DevAssignmentCrypto
+from locus_runtime.grants import broker_for_mode, PresignedUrlBroker
 from locus_runtime import tensor_io
 from locus_runtime.storage import ObjectStore
 from locus_tasks import load_task
@@ -21,6 +23,9 @@ class RunConfig:
     max_steps: int = 1
     owner_secret: str = "owner-dev-secret"
     crypto_policy: ArtifactCryptoPolicy | None = None
+    grant_mode: str = "direct"
+    grant_ttl_sec: int = 600
+    assignment_secret: str = "locus-dev-assignment"
 
 
 class RunManager:
@@ -32,6 +37,8 @@ class RunManager:
         self.quota = QuotaBook()
         self.gate = CriticalGate()
         self.emitted: list[str] = []
+        self.grant_broker = broker_for_mode(config.grant_mode, bucket)
+        self.assignment_crypto = DevAssignmentCrypto(config.assignment_secret)
 
     def bootstrap(self) -> None:
         w0, w1 = self.task.initial_weights()
@@ -234,6 +241,7 @@ class RunManager:
             self.bucket.uri_for_key(paths.job_manifest_key(self.config.netuid, self.config.run_id, job_id)),
             manifest.to_dict(),
         )
+        self.emit_assignment_grant(manifest)
         self.emitted.append(job_id)
         self.bucket.put_json(
             self.bucket.uri_for_key(paths.job_index_key(self.config.netuid, self.config.run_id)),
@@ -297,4 +305,43 @@ class RunManager:
             sha256=ref.sha256,
             size_bytes=ref.size_bytes,
             crypto=crypto,
+        )
+
+    def emit_assignment_grant(self, manifest: JobManifestV3) -> None:
+        if self.grant_broker is None:
+            return
+        now = int(time.time())
+        receipt_uri = self.bucket.uri_for_key(
+            paths.receipt_key(
+                self.config.netuid,
+                manifest.run_id,
+                manifest.assigned_hotkey,
+                manifest.job_id,
+                manifest.attempt,
+            )
+        )
+        grant = AssignmentGrantV3(
+            job_id=manifest.job_id,
+            run_id=manifest.run_id,
+            assigned_hotkey=manifest.assigned_hotkey,
+            input_gets=[self.grant_broker.get_grant(ref.uri, expires_in=self.config.grant_ttl_sec) for ref in manifest.inputs],
+            output_puts=[self.grant_broker.put_grant(ref.uri, expires_in=self.config.grant_ttl_sec) for ref in manifest.outputs],
+            receipt_put=self.grant_broker.put_grant(receipt_uri, expires_in=self.config.grant_ttl_sec),
+            created_unix=now,
+            expires_unix=now + int(self.config.grant_ttl_sec),
+        )
+        encrypted = self.assignment_crypto.encrypt_for_hotkey(
+            grant,
+            recipient_hotkey=manifest.assigned_hotkey,
+        )
+        self.bucket.put_json(
+            self.bucket.uri_for_key(
+                paths.assignment_key(
+                    self.config.netuid,
+                    manifest.run_id,
+                    manifest.job_id,
+                    manifest.assigned_hotkey,
+                )
+            ),
+            encrypted.to_dict(),
         )

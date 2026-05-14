@@ -12,11 +12,7 @@ The current v3 implementation supports:
 - shared-bucket fleet runs
 - replay validation and compute-unit scoring
 - dry-run or real Bittensor `set_weights` adapter
-- round-style MLP jobs and a v3 streaming bridge for `gpt_pipe`
-
-The tensor IR, evaluator, storage, and `gpt_pipe` graph builders are reused
-from the sibling `locus_v2` checkout. Keep `locus_v2` beside `locus_v3` in the
-repo layout until those modules are vendored into v3.
+- round-style MLP jobs and a v3-native streaming bridge for `gpt_pipe`
 
 ## Install
 
@@ -27,10 +23,18 @@ uv sync
 source .venv/bin/activate
 ```
 
-For Bittensor or Lium helpers:
+For the full install, including Bittensor, drand timelock, Lium, dataset
+helpers, and tests:
 
 ```bash
-uv sync --extra subnet --extra lium
+uv sync --all-extras
+source .venv/bin/activate
+```
+
+For only subnet dependencies:
+
+```bash
+uv sync --extra subnet
 source .venv/bin/activate
 ```
 
@@ -85,12 +89,13 @@ files.
 - [Mining](docs/mining.md)
 - [Running the Validator](docs/validator.md)
 - [SDK Usage](docs/sdk.md)
+- [V2 Architecture Preserved In V3](docs/v2-architecture.md)
+- [Scaling Lessons](docs/scaling-lessons.md)
+- [Fleet Operations Notes](docs/fleet-operations.md)
 
 ## Current Caveats
 
-- `locus_v3` currently reuses the sibling `locus_v2` core tensor stack.
-- The `gpt_pipe` streaming bridge emits v3 manifests and receipts, but still
-  uses the v2 `gpt_pipe` internal artifact layout for weights/static/streaming
-  tensors.
+- The `gpt_pipe` streaming bridge is a compact v3-native pipeline smoke task,
+  not the full historical GPT workload.
 - Real subnet operation requires a valid Bittensor wallet, registered hotkeys,
   and validator permissions for `set_weights`.

@@ -16,6 +16,7 @@ from . import tensor_io
 from .crypto import decode_envelope, encode_envelope, artifact_digest_from_blob, DrandTimelockProvider
 from .eval import evaluate
 from .storage import ObjectStore
+from .transport import ArtifactTransport, DirectArtifactTransport
 
 
 class JobExecutor:
@@ -28,6 +29,7 @@ class JobExecutor:
         output_cache_mb: int = 256,
         encryption_secret: str = "locus-dev-encryption",
         timelock_provider: DrandTimelockProvider | None = None,
+        transport: ArtifactTransport | None = None,
     ) -> None:
         self.bucket = bucket
         self.device = device
@@ -42,6 +44,7 @@ class JobExecutor:
         self._output_max = output_cache_mb * 1024 * 1024
         self.encryption_secret = encryption_secret
         self.timelock_provider = timelock_provider
+        self.transport = transport or DirectArtifactTransport(bucket)
 
     @staticmethod
     def digest_body(name: str, uri: str, body: bytes, policy=None) -> ArtifactDigest:
@@ -49,7 +52,7 @@ class JobExecutor:
         return ArtifactDigest(name=name, uri=uri, **data)
 
     def digest_artifact(self, ref: ArtifactRef) -> ArtifactDigest:
-        return self.digest_body(ref.name, ref.uri, self.bucket.get(ref.uri), ref.crypto)
+        return self.digest_body(ref.name, ref.uri, self.transport.get(ref.uri), ref.crypto)
 
     def fetch_graph(self, graph_sha: str, graph_uri: str) -> Graph:
         cached = self._graph_cache.get(graph_sha)
@@ -62,14 +65,14 @@ class JobExecutor:
         self._graph_cache[graph_sha] = graph
         return graph
 
-    def decode_input(self, ref: ArtifactRef) -> torch.Tensor:
+    def decode_input(self, ref: ArtifactRef, grants: dict[str, Any] | None = None) -> torch.Tensor:
         cached_out = self._output_cache.get(ref.uri)
         if cached_out is not None:
             return cached_out.to(self.device)
         cached_in = self._input_cache.get(ref.uri)
         if cached_in is not None:
             return cached_in.to(self.device)
-        body = self.bucket.get(ref.uri)
+        body = self.transport.get(ref.uri, (grants or {}).get(ref.uri))
         body = decode_envelope(
             body,
             ref.crypto,
@@ -144,6 +147,7 @@ class JobExecutor:
         miner_secret: str,
         fault_mode: str = "",
         fault_rate: float = 1.0,
+        grants: dict[str, Any] | None = None,
     ) -> JobReceiptV3:
         t0 = time.time()
         graph = self.fetch_graph(manifest.graph_ref.sha256, manifest.graph_ref.uri)
@@ -156,10 +160,10 @@ class JobExecutor:
                 miss_refs.append(ref)
         inputs: dict[str, torch.Tensor] = {}
         for ref in cached_refs:
-            inputs[ref.name] = self.decode_input(ref)
+            inputs[ref.name] = self.decode_input(ref, grants=grants)
         if miss_refs:
             with ThreadPoolExecutor(max_workers=min(len(miss_refs), 8)) as ex:
-                values = list(ex.map(self.decode_input, miss_refs))
+                values = list(ex.map(lambda r: self.decode_input(r, grants=grants), miss_refs))
             for ref, value in zip(miss_refs, values):
                 inputs[ref.name] = value
 
@@ -185,12 +189,15 @@ class JobExecutor:
             put_jobs.append((ref.uri, body))
             output_digests.append(self.digest_body(ref.name, ref.uri, body, ref.crypto))
         with ThreadPoolExecutor(max_workers=min(len(put_jobs), 8) or 1) as ex:
-            list(ex.map(lambda item: self.bucket.put(item[0], item[1]), put_jobs))
+            list(ex.map(lambda item: self.transport.put(item[0], item[1], (grants or {}).get(item[0])), put_jobs))
         for ref in manifest.outputs:
             self._cache_output(ref.uri, outputs[ref.name])
         t_final = time.time()
 
-        input_digests = [self.digest_artifact(ref) for ref in manifest.inputs]
+        input_digests = [
+            self.digest_body(ref.name, ref.uri, self.transport.get(ref.uri, (grants or {}).get(ref.uri)), ref.crypto)
+            for ref in manifest.inputs
+        ]
         receipt = JobReceiptV3(
             receipt_id=f"{manifest.run_id}:{manifest.job_id}:{worker.hotkey_ss58}:{worker.worker_id}:{manifest.attempt}",
             manifest_hash=manifest.manifest_hash(),

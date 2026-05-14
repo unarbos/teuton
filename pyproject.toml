@@ -12,8 +12,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-subnet = ["bittensor>=9.0"]
+subnet = ["bittensor>=9.0", "bittensor-drand>=1.3"]
 lium = ["lium.io>=0.0.15"]
+data = ["datasets>=2.18", "tiktoken>=0.7"]
 test = ["pytest>=8.0"]
 
 
@@ -25,15 +26,20 @@ build-backend = "setuptools.build_meta"
 packages = [
     "locus_core",
     "locus_runtime",
+    "locus_runtime.data",
     "locus_orchestrator",
     "locus_miner",
     "locus_validator",
     "locus_tasks",
+    "locus_legacy_v2",
+    "locus_legacy_v2.tasks",
+    "locus_legacy_v2.data",
     "bench",
 ]
 
 [project.scripts]
 locus-v3 = "locus_core.cli:main"
+locus-v2-legacy = "locus_legacy_v2.main:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -41,4 +47,6 @@ markers = [
     "s3: requires LOCUS_TEST_S3=1 and bucket credentials",
     "lium: requires LOCUS_TEST_LIUM=1 and LIUM_API_KEY",
     "subnet: requires LOCUS_TEST_SUBNET=1 and Bittensor wallet config",
+    "dataset: requires optional dataset/tokenizer dependencies",
+    "drand: requires LOCUS_TEST_DRAND=1, network access, and bittensor-drand",
 ]

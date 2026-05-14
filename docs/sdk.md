@@ -218,6 +218,36 @@ locus-v3 orchestrator \
   --drand-round 123456
 ```
 
+## Encrypted Assignment Grants
+
+For production-style bucket access, keep the manifest public and put sensitive
+bearer URLs in an encrypted assignment grant.
+
+```bash
+locus-v3 orchestrator \
+  --run-id RUN_ID \
+  --task mlp \
+  --grant-mode presigned \
+  --grant-ttl-sec 600
+```
+
+The orchestrator writes:
+
+```text
+v3/netuid=<N>/jobs/<run_id>/<job_id>/manifest.json
+v3/netuid=<N>/assignments/<run_id>/<job_id>/hotkey=<H>.json
+```
+
+The manifest contains canonical `s3://` input/output URIs. The assignment file
+contains encrypted GET/PUT grants for those exact URIs plus the receipt URI.
+
+Local tests can use the same path without S3:
+
+```bash
+locus-v3 orchestrator --run-id RUN_ID --grant-mode local
+locus-v3 miner --run-id RUN_ID --hotkey miner0 --grant-mode local
+```
+
 ## Lifecycle
 
 Use the v3 lifecycle helper to clean all prefixes owned by a run:

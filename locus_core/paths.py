@@ -50,6 +50,10 @@ def job_step_index_key(netuid: int, run_id: str, step_id: int) -> str:
     return f"{jobs_prefix(netuid, run_id)}step={step_id}/index.json"
 
 
+def assignment_key(netuid: int, run_id: str, job_id: str, hotkey: str) -> str:
+    return f"{root(netuid)}/assignments/{run_id}/{job_id}/hotkey={hotkey}.json"
+
+
 def weights_key(netuid: int, run_id: str, step_id: int, ub: int) -> str:
     return f"{run_root(netuid, run_id)}/weights/step={step_id}/UB-{ub}.bin"
 

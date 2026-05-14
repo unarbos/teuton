@@ -14,6 +14,7 @@ from locus_orchestrator.run_manager import RunConfig, RunManager
 from locus_orchestrator.streaming import StreamingRunConfig, StreamingRunManager
 from locus_runtime.lifecycle import wipe_run
 from locus_runtime.storage import S3Bucket, open_local_bucket
+from locus_validator.ledger import summarize_ledger
 from locus_validator.neuron import ValidatorNeuron, ValidatorNeuronConfig
 
 
@@ -71,7 +72,20 @@ def cmd_local_smoke(args: argparse.Namespace) -> int:
         t = threading.Thread(target=miner.loop, daemon=True)
         t.start()
         threads.append(t)
-    orch = RunManager(bucket=bucket, config=RunConfig(netuid=args.netuid, run_id=run_id, task=args.task, max_steps=args.steps, owner_secret=args.owner_secret, crypto_policy=build_crypto_policy(args)))
+    orch = RunManager(
+        bucket=bucket,
+        config=RunConfig(
+            netuid=args.netuid,
+            run_id=run_id,
+            task=args.task,
+            max_steps=args.steps,
+            owner_secret=args.owner_secret,
+            crypto_policy=build_crypto_policy(args),
+            grant_mode=args.grant_mode,
+            grant_ttl_sec=args.grant_ttl_sec,
+            assignment_secret=args.assignment_secret,
+        ),
+    )
     orch.run_loop(timeout_sec=args.timeout_sec)
     for miner in miners:
         miner.stop()
@@ -106,13 +120,26 @@ def cmd_orchestrator(args: argparse.Namespace) -> int:
                 max_epochs=args.steps,
                 owner_secret=args.owner_secret,
                 crypto_policy=build_crypto_policy(args),
+                grant_mode=args.grant_mode,
+                grant_ttl_sec=args.grant_ttl_sec,
+                assignment_secret=args.assignment_secret,
             ),
         )
         manager.run_loop(poll_interval=args.poll_interval, timeout_sec=args.timeout_sec)
         return 0
     manager = RunManager(
         bucket=bucket,
-        config=RunConfig(netuid=args.netuid, run_id=args.run_id, task=args.task, max_steps=args.steps, owner_secret=args.owner_secret, crypto_policy=build_crypto_policy(args)),
+        config=RunConfig(
+            netuid=args.netuid,
+            run_id=args.run_id,
+            task=args.task,
+            max_steps=args.steps,
+            owner_secret=args.owner_secret,
+            crypto_policy=build_crypto_policy(args),
+            grant_mode=args.grant_mode,
+            grant_ttl_sec=args.grant_ttl_sec,
+            assignment_secret=args.assignment_secret,
+        ),
     )
     manager.run_loop(poll_interval=args.poll_interval, timeout_sec=args.timeout_sec)
     return 0
@@ -133,6 +160,8 @@ def cmd_miner(args: argparse.Namespace) -> int:
             fault_rate=args.fault_rate,
             miner_secret=args.miner_secret,
             encryption_secret=args.encryption_secret,
+            grant_mode=args.grant_mode,
+            assignment_secret=args.assignment_secret,
         ),
     )
     try:
@@ -174,6 +203,19 @@ def cmd_wipe(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_ledger(args: argparse.Namespace) -> int:
+    bucket = build_bucket(args)
+    summary = summarize_ledger(
+        bucket,
+        netuid=args.netuid,
+        run_id=args.run_id,
+        window_id=args.window_id,
+        validator_secret=args.validator_secret,
+    )
+    print(json.dumps(summary.to_dict(), indent=2, sort_keys=True))
+    return 0
+
+
 def add_bucket_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--local-root", default="/tmp/locus-v3")
     p.add_argument("--bucket", default="locus-v3")
@@ -189,6 +231,12 @@ def add_crypto_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--crypto-key-id", default=None)
     p.add_argument("--required-signer", default=None)
     p.add_argument("--drand-round", type=int, default=None)
+
+
+def add_grant_args(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--grant-mode", choices=["direct", "local", "presigned"], default="direct")
+    p.add_argument("--grant-ttl-sec", type=int, default=600)
+    p.add_argument("--assignment-secret", default=os.environ.get("LOCUS_ASSIGNMENT_SECRET", "locus-dev-assignment"))
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -213,6 +261,7 @@ def build_parser() -> argparse.ArgumentParser:
     smoke.add_argument("--validator-secret", default=os.environ.get("LOCUS_VALIDATOR_SECRET", "validator-dev-secret"))
     smoke.add_argument("--encryption-secret", default=os.environ.get("LOCUS_ENCRYPTION_SECRET", "locus-dev-encryption"))
     add_crypto_args(smoke)
+    add_grant_args(smoke)
     smoke.set_defaults(fn=cmd_local_smoke)
 
     orch = sub.add_parser("orchestrator")
@@ -225,6 +274,7 @@ def build_parser() -> argparse.ArgumentParser:
     orch.add_argument("--timeout-sec", type=float, default=600.0)
     orch.add_argument("--owner-secret", default=os.environ.get("LOCUS_OWNER_SECRET", "owner-dev-secret"))
     add_crypto_args(orch)
+    add_grant_args(orch)
     orch.set_defaults(fn=cmd_orchestrator)
 
     miner = sub.add_parser("miner")
@@ -238,6 +288,7 @@ def build_parser() -> argparse.ArgumentParser:
     miner.add_argument("--fault-rate", type=float, default=1.0)
     miner.add_argument("--miner-secret", default=os.environ.get("LOCUS_MINER_SECRET", "miner-dev-secret"))
     miner.add_argument("--encryption-secret", default=os.environ.get("LOCUS_ENCRYPTION_SECRET", "locus-dev-encryption"))
+    add_grant_args(miner)
     miner.set_defaults(fn=cmd_miner)
 
     val = sub.add_parser("validator")
@@ -264,6 +315,14 @@ def build_parser() -> argparse.ArgumentParser:
     wipe.add_argument("--netuid", type=int, default=0)
     wipe.add_argument("--run-id", required=True)
     wipe.set_defaults(fn=cmd_wipe)
+
+    ledger = sub.add_parser("ledger")
+    add_bucket_args(ledger)
+    ledger.add_argument("--netuid", type=int, default=0)
+    ledger.add_argument("--run-id", required=True)
+    ledger.add_argument("--window-id", default=None)
+    ledger.add_argument("--validator-secret", default=os.environ.get("LOCUS_VALIDATOR_SECRET", "validator-dev-secret"))
+    ledger.set_defaults(fn=cmd_ledger)
 
     return p
 

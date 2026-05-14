@@ -10,7 +10,9 @@ import time
 from dataclasses import dataclass
 
 from locus_core import paths
-from locus_core.protocol import ArtifactCryptoPolicy, ArtifactRef, GraphRef, JobManifestV3, MinerIdentity, VerificationPolicy, WorkerIdentity
+from locus_core.protocol import ArtifactCryptoPolicy, ArtifactRef, AssignmentGrantV3, GraphRef, JobManifestV3, MinerIdentity, VerificationPolicy, WorkerIdentity
+from locus_core.wallet_crypto import DevAssignmentCrypto
+from locus_runtime.grants import broker_for_mode
 from locus_runtime.storage import ObjectStore
 from locus_tasks import load_streaming_task
 from .scheduler import QuotaBook
@@ -24,6 +26,9 @@ class StreamingRunConfig:
     max_epochs: int = 1
     owner_secret: str = "owner-dev-secret"
     crypto_policy: ArtifactCryptoPolicy | None = None
+    grant_mode: str = "direct"
+    grant_ttl_sec: int = 600
+    assignment_secret: str = "locus-dev-assignment"
 
 
 class StreamingRunManager:
@@ -33,6 +38,9 @@ class StreamingRunManager:
         self.task = load_streaming_task(config.task)
         self.quota = QuotaBook()
         self.emitted: list[str] = []
+        self.jobs: dict[str, JobManifestV3] = {}
+        self.grant_broker = broker_for_mode(config.grant_mode, bucket)
+        self.assignment_crypto = DevAssignmentCrypto(config.assignment_secret)
 
     def bootstrap(self) -> None:
         self.task.bootstrap(bucket=self.bucket, run_id=self.config.run_id, max_rounds=self.config.max_epochs)
@@ -98,7 +106,8 @@ class StreamingRunManager:
         inputs: list[ArtifactRef] = []
         if s != 0:
             for name, _shape, _dtype in stage.forward_input_specs:
-                inputs.append(ArtifactRef(name=name, uri=self.fwd_output_uri(epoch, s - 1, mb, name), crypto=self.config.crypto_policy))
+                upstream = self.jobs[f"j-e{epoch}-s{s - 1}-mb{mb}-fwd"].outputs[0]
+                inputs.append(ArtifactRef(name=name, uri=upstream.uri, crypto=upstream.crypto))
         if stage.weights_input_name and self.params.training:
             inputs.append(ArtifactRef(name=stage.weights_input_name, uri=self.epoch_weights_uri(epoch, s)))
         is_tail = s == self.params.n_stages - 1
@@ -127,14 +136,17 @@ class StreamingRunManager:
         is_head = s == 0
         inputs = [ArtifactRef(name=stage.weights_input_name or "W", uri=self.epoch_weights_uri(epoch, s))]
         if not is_head:
-            inputs.append(ArtifactRef(name="x_in", uri=self.fwd_output_uri(epoch, s - 1, mb, "x"), crypto=self.config.crypto_policy))
+            upstream = self.jobs[f"j-e{epoch}-s{s - 1}-mb{mb}-fwd"].outputs[0]
+            inputs.append(ArtifactRef(name="x_in", uri=upstream.uri, crypto=upstream.crypto))
         if is_tail and self.params.target_static_uri:
             inputs.append(ArtifactRef(name="target", uri=self.params.target_static_uri))
         for name, (uri, scope) in self.params.static_inputs.items():
             if scope == "all" or (scope == "head" and is_head) or (scope == "tail" and is_tail) or (scope == "head_and_tail" and (is_head or is_tail)):
                 inputs.append(ArtifactRef(name=name, uri=uri))
         if not is_tail:
-            inputs.append(ArtifactRef(name="dL_dx_out", uri=self.bwd_output_uri(epoch, s + 1, mb, "dL_dx_in"), crypto=self.config.crypto_policy))
+            upstream = self.jobs[f"j-e{epoch}-s{s + 1}-mb{mb}-bwd"]
+            dx = next(ref for ref in upstream.outputs if ref.name == "dL_dx_in")
+            inputs.append(ArtifactRef(name="dL_dx_out", uri=dx.uri, crypto=dx.crypto))
         outputs = [self.output_ref(name="dW", uri=self.bwd_output_uri(epoch, s, mb, "dW"))]
         if not is_head and stage.backward_emits_dx_in:
             outputs.append(self.output_ref(name="dL_dx_in", uri=self.bwd_output_uri(epoch, s, mb, "dL_dx_in")))
@@ -152,7 +164,9 @@ class StreamingRunManager:
         s = stage.stage_id
         inputs = [ArtifactRef(name=stage.weights_input_name or "W", uri=self.epoch_weights_uri(epoch, s))]
         for mb in range(self.params.n_microbatches):
-            inputs.append(ArtifactRef(name=f"dW_{mb}", uri=self.bwd_output_uri(epoch, s, mb, "dW"), crypto=self.config.crypto_policy))
+            upstream = self.jobs[f"j-e{epoch}-s{s}-mb{mb}-bwd"]
+            dw = next(ref for ref in upstream.outputs if ref.name == "dW")
+            inputs.append(ArtifactRef(name=f"dW_{mb}", uri=dw.uri, crypto=dw.crypto))
         outputs = [self.output_ref(name="W_new", uri=self.epoch_weights_uri(epoch + 1, s))]
         return self.emit_job(
             job_id=f"j-e{epoch}-s{s}-outer",
@@ -186,7 +200,9 @@ class StreamingRunManager:
             verification_policy=VerificationPolicy(critical=kind == "pipe_outer"),
         ).sign(self.config.owner_secret)
         self.bucket.put_json(self.bucket.uri_for_key(paths.job_manifest_key(self.config.netuid, self.config.run_id, job_id)), manifest.to_dict())
+        self.emit_assignment_grant(manifest)
         self.emitted.append(job_id)
+        self.jobs[job_id] = manifest
         self.bucket.put_json(self.bucket.uri_for_key(paths.job_index_key(self.config.netuid, self.config.run_id)), self.emitted)
         step_index = self.bucket.uri_for_key(paths.job_step_index_key(self.config.netuid, self.config.run_id, step_id))
         current = self.bucket.get_json(step_index) if self.bucket.exists(step_index) else []
@@ -232,3 +248,32 @@ class StreamingRunManager:
         crypto = ArtifactCryptoPolicy.from_dict(ref.crypto.to_dict())
         crypto.required_signer = worker.hotkey_ss58
         return ArtifactRef(name=ref.name, uri=ref.uri, sha256=ref.sha256, size_bytes=ref.size_bytes, crypto=crypto)
+
+    def emit_assignment_grant(self, manifest: JobManifestV3) -> None:
+        if self.grant_broker is None:
+            return
+        now = int(time.time())
+        receipt_uri = self.bucket.uri_for_key(
+            paths.receipt_key(
+                self.config.netuid,
+                manifest.run_id,
+                manifest.assigned_hotkey,
+                manifest.job_id,
+                manifest.attempt,
+            )
+        )
+        grant = AssignmentGrantV3(
+            job_id=manifest.job_id,
+            run_id=manifest.run_id,
+            assigned_hotkey=manifest.assigned_hotkey,
+            input_gets=[self.grant_broker.get_grant(ref.uri, expires_in=self.config.grant_ttl_sec) for ref in manifest.inputs],
+            output_puts=[self.grant_broker.put_grant(ref.uri, expires_in=self.config.grant_ttl_sec) for ref in manifest.outputs],
+            receipt_put=self.grant_broker.put_grant(receipt_uri, expires_in=self.config.grant_ttl_sec),
+            created_unix=now,
+            expires_unix=now + int(self.config.grant_ttl_sec),
+        )
+        encrypted = self.assignment_crypto.encrypt_for_hotkey(grant, recipient_hotkey=manifest.assigned_hotkey)
+        self.bucket.put_json(
+            self.bucket.uri_for_key(paths.assignment_key(self.config.netuid, manifest.run_id, manifest.job_id, manifest.assigned_hotkey)),
+            encrypted.to_dict(),
+        )

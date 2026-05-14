@@ -23,6 +23,8 @@ class MinerNeuronConfig:
     fault_mode: str = ""
     fault_rate: float = 1.0
     encryption_secret: str = "locus-dev-encryption"
+    grant_mode: str = "direct"
+    assignment_secret: str = "locus-dev-assignment"
 
 
 class MinerNeuron:
@@ -43,6 +45,8 @@ class MinerNeuron:
                     fault_mode=config.fault_mode,
                     fault_rate=config.fault_rate,
                     encryption_secret=config.encryption_secret,
+                    grant_mode=config.grant_mode,
+                    assignment_secret=config.assignment_secret,
                 ),
             )
             for i, device in enumerate(config.devices)

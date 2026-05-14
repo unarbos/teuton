@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import time
 
 import pytest
 import torch
@@ -9,7 +11,7 @@ from locus_core.ir import GraphBuilder
 from locus_core.protocol import ArtifactCryptoPolicy, ArtifactRef, CryptoMode, GraphRef, JobManifestV3, VerificationPolicy, WorkerIdentity
 from locus_core.signatures import HmacSigner
 from locus_runtime import tensor_io
-from locus_runtime.crypto import MockDrandTimelockProvider, TimelockPending, decode_envelope, encode_envelope
+from locus_runtime.crypto import BittensorDrandTimelockProvider, MockDrandTimelockProvider, TimelockPending, decode_envelope, encode_envelope
 from locus_runtime.executor import JobExecutor
 from locus_validator.neuron import ValidatorNeuron, ValidatorNeuronConfig
 
@@ -118,3 +120,29 @@ def test_mock_timelock_blocks_until_reveal() -> None:
     with pytest.raises(TimelockPending):
         decode_envelope(blob, policy, verifier=HmacSigner("secret"), timelock_provider=locked)
     assert decode_envelope(blob, policy, verifier=HmacSigner("secret"), timelock_provider=revealed) == b"secret"
+
+
+@pytest.mark.drand
+def test_real_drand_tlock_round_trip() -> None:
+    if os.environ.get("LOCUS_TEST_DRAND") != "1":
+        pytest.skip("set LOCUS_TEST_DRAND=1 to run real drand tlock test")
+
+    provider = BittensorDrandTimelockProvider()
+    target_round = provider.latest_round() + 1
+    policy = ArtifactCryptoPolicy(
+        mode=CryptoMode.DRAND_TIMELOCK.value,
+        drand_round=target_round,
+    )
+    signer = HmacSigner("secret", identity="miner")
+    blob = encode_envelope(b"real drand secret", policy, signer=signer, timelock_provider=provider)
+
+    deadline = time.time() + 20
+    last_error: Exception | None = None
+    while time.time() < deadline:
+        try:
+            assert decode_envelope(blob, policy, verifier=HmacSigner("secret"), timelock_provider=provider) == b"real drand secret"
+            return
+        except TimelockPending as e:
+            last_error = e
+            time.sleep(1)
+    raise AssertionError(f"drand round {target_round} did not reveal before timeout: {last_error}")

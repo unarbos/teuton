@@ -117,6 +117,167 @@ class ArtifactEnvelope:
 
 
 @dataclass
+class MetagraphMinerIdentity:
+    netuid: int
+    uid: int
+    hotkey_ss58: str
+    coldkey_ss58: str | None = None
+    stake: float | None = None
+    metagraph_block: int | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        out: dict[str, Any] = {
+            "netuid": int(self.netuid),
+            "uid": int(self.uid),
+            "hotkey_ss58": self.hotkey_ss58,
+        }
+        if self.coldkey_ss58 is not None:
+            out["coldkey_ss58"] = self.coldkey_ss58
+        if self.stake is not None:
+            out["stake"] = float(self.stake)
+        if self.metagraph_block is not None:
+            out["metagraph_block"] = int(self.metagraph_block)
+        return out
+
+    @staticmethod
+    def from_dict(d: dict[str, Any]) -> "MetagraphMinerIdentity":
+        return MetagraphMinerIdentity(
+            netuid=int(d["netuid"]),
+            uid=int(d["uid"]),
+            hotkey_ss58=d["hotkey_ss58"],
+            coldkey_ss58=d.get("coldkey_ss58"),
+            stake=d.get("stake"),
+            metagraph_block=d.get("metagraph_block"),
+        )
+
+
+@dataclass
+class PresignedUrlGrant:
+    method: str
+    canonical_uri: str
+    url: str
+    expires_unix: int
+    content_sha256: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        out = {
+            "method": self.method,
+            "canonical_uri": self.canonical_uri,
+            "url": self.url,
+            "expires_unix": int(self.expires_unix),
+        }
+        if self.content_sha256 is not None:
+            out["content_sha256"] = self.content_sha256
+        return out
+
+    @staticmethod
+    def from_dict(d: dict[str, Any]) -> "PresignedUrlGrant":
+        return PresignedUrlGrant(
+            method=d["method"],
+            canonical_uri=d["canonical_uri"],
+            url=d["url"],
+            expires_unix=int(d["expires_unix"]),
+            content_sha256=d.get("content_sha256"),
+        )
+
+
+@dataclass
+class AssignmentGrantV3:
+    job_id: str
+    run_id: str
+    assigned_hotkey: str
+    input_gets: list[PresignedUrlGrant] = field(default_factory=list)
+    output_puts: list[PresignedUrlGrant] = field(default_factory=list)
+    receipt_put: PresignedUrlGrant | None = None
+    created_unix: int = 0
+    expires_unix: int = 0
+    schema_version: int = 1
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": int(self.schema_version),
+            "job_id": self.job_id,
+            "run_id": self.run_id,
+            "assigned_hotkey": self.assigned_hotkey,
+            "input_gets": [g.to_dict() for g in self.input_gets],
+            "output_puts": [g.to_dict() for g in self.output_puts],
+            "receipt_put": self.receipt_put.to_dict() if self.receipt_put else None,
+            "created_unix": int(self.created_unix),
+            "expires_unix": int(self.expires_unix),
+        }
+
+    @staticmethod
+    def from_dict(d: dict[str, Any]) -> "AssignmentGrantV3":
+        return AssignmentGrantV3(
+            schema_version=int(d.get("schema_version", 1)),
+            job_id=d["job_id"],
+            run_id=d["run_id"],
+            assigned_hotkey=d["assigned_hotkey"],
+            input_gets=[PresignedUrlGrant.from_dict(x) for x in d.get("input_gets", [])],
+            output_puts=[PresignedUrlGrant.from_dict(x) for x in d.get("output_puts", [])],
+            receipt_put=PresignedUrlGrant.from_dict(d["receipt_put"]) if d.get("receipt_put") else None,
+            created_unix=int(d.get("created_unix", 0)),
+            expires_unix=int(d.get("expires_unix", 0)),
+        )
+
+
+@dataclass
+class EncryptedAssignmentGrantV3:
+    job_id: str
+    run_id: str
+    recipient_hotkey: str
+    ciphertext_b64: str
+    crypto_scheme: str = "dev-xor-v1"
+    recipient_uid: int | None = None
+    metagraph_block: int | None = None
+    metagraph_hash: str | None = None
+    sender_hotkey: str | None = None
+    sender_public_key_hex: str | None = None
+    recipient_public_key_hex: str | None = None
+    schema_version: int = 1
+
+    def to_dict(self) -> dict[str, Any]:
+        out = {
+            "schema_version": int(self.schema_version),
+            "job_id": self.job_id,
+            "run_id": self.run_id,
+            "recipient_hotkey": self.recipient_hotkey,
+            "ciphertext_b64": self.ciphertext_b64,
+            "crypto_scheme": self.crypto_scheme,
+        }
+        if self.recipient_uid is not None:
+            out["recipient_uid"] = int(self.recipient_uid)
+        if self.metagraph_block is not None:
+            out["metagraph_block"] = int(self.metagraph_block)
+        if self.metagraph_hash is not None:
+            out["metagraph_hash"] = self.metagraph_hash
+        if self.sender_hotkey is not None:
+            out["sender_hotkey"] = self.sender_hotkey
+        if self.sender_public_key_hex is not None:
+            out["sender_public_key_hex"] = self.sender_public_key_hex
+        if self.recipient_public_key_hex is not None:
+            out["recipient_public_key_hex"] = self.recipient_public_key_hex
+        return out
+
+    @staticmethod
+    def from_dict(d: dict[str, Any]) -> "EncryptedAssignmentGrantV3":
+        return EncryptedAssignmentGrantV3(
+            schema_version=int(d.get("schema_version", 1)),
+            job_id=d["job_id"],
+            run_id=d["run_id"],
+            recipient_hotkey=d["recipient_hotkey"],
+            ciphertext_b64=d["ciphertext_b64"],
+            crypto_scheme=d.get("crypto_scheme", "dev-xor-v1"),
+            recipient_uid=d.get("recipient_uid"),
+            metagraph_block=d.get("metagraph_block"),
+            metagraph_hash=d.get("metagraph_hash"),
+            sender_hotkey=d.get("sender_hotkey"),
+            sender_public_key_hex=d.get("sender_public_key_hex"),
+            recipient_public_key_hex=d.get("recipient_public_key_hex"),
+        )
+
+
+@dataclass
 class ArtifactRef:
     name: str
     uri: str

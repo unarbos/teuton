@@ -5,8 +5,29 @@ import importlib
 from typing import Protocol, runtime_checkable
 
 
-KNOWN_TASKS = {"mlp"}
-STREAMING_TASKS = {"gpt_pipe"}
+NATIVE_ROUND_TASKS = {"mlp"}
+LEGACY_ROUND_TASKS = {
+    "adam_mlp",
+    "data_parallel_mlp",
+    "legacy_mlp",
+    "locoprop_mlp",
+    "pluralis_asymmetric",
+    "pluralis_demo",
+    "pluralis_full",
+    "pluralis_gpt_10M",
+    "pluralis_gpt_10M_v3",
+    "pluralis_grassmann",
+    "pluralis_grouped",
+    "pluralis_int8",
+    "pluralis_lossless_wire",
+    "pluralis_subspace",
+    "pluralis_tied",
+    "relu_mlp",
+    "sign_loco_mlp",
+    "tiny_gpt",
+}
+STREAMING_TASKS = {"gpt_pipe", "pipe_demo", "pipe_train"}
+KNOWN_TASKS = NATIVE_ROUND_TASKS | LEGACY_ROUND_TASKS
 
 
 @runtime_checkable
@@ -29,8 +50,13 @@ def load_task(name: str):
     if name in STREAMING_TASKS:
         raise ValueError(
             f"task {name!r} is a streaming task. Its IR builders are available "
-            "under locus_tasks.gpt_pipe, but the v3 streaming scheduler is not "
-            "wired into RunManager yet; use 'mlp' for the round scheduler."
+            "under locus_tasks and should be run through StreamingRunManager."
+        )
+    if name in LEGACY_ROUND_TASKS:
+        raise ValueError(
+            f"task {name!r} is preserved from v2 under locus_tasks.{name}, but "
+            "the v3 RunManager supports only native round tasks. Use the "
+            "`locus-v2-legacy` runner for v2-style round orchestration."
         )
     if name not in KNOWN_TASKS:
         known = sorted(KNOWN_TASKS | STREAMING_TASKS)

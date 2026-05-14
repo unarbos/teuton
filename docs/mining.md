@@ -54,6 +54,32 @@ locus-v3 miner \
   --s3-region "$S3_REGION"
 ```
 
+## Grant Modes
+
+By default miners use `--grant-mode direct`, which means the process already
+has bucket credentials. For subnet-style operation, use encrypted assignment
+grants:
+
+```bash
+locus-v3 miner \
+  --run-id RUN_ID \
+  --hotkey MINER_HOTKEY \
+  --devices cuda \
+  --grant-mode presigned
+```
+
+Grant modes:
+
+- `direct`: use the configured bucket credentials directly.
+- `local`: use encrypted grants that resolve to local/direct bucket operations;
+  useful for tests.
+- `presigned`: use encrypted grants containing presigned S3 GET/PUT URLs.
+
+The miner decrypts the assignment grant, verifies it matches the public
+manifest, then uses the granted URLs to read inputs and write outputs/receipts.
+The grant payload is safe to store publicly because it is encrypted to the
+assigned miner identity.
+
 ## Run Multiple GPUs
 
 Use a comma-separated device list:
