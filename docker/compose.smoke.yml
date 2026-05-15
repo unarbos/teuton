@@ -1,0 +1,49 @@
+# Phase 1.5 smoke test: verify Watchtower auto-update.
+#
+# Starts a tiny container using locus:miner that prints its image SHA + build
+# stamp every 30s, alongside Watchtower (label-enabled, 60s poll). Then we
+# rebuild + push :miner (no other tags) and within ~60s the smoke container
+# should restart with the new image.
+#
+# Used by scripts/watchtower_smoke.sh. Not deployed to remotes.
+name: locus-smoke
+
+services:
+  smoke:
+    image: ${DOCKER_USER}/locus:miner
+    container_name: locus-smoke
+    restart: always
+    pull_policy: always
+    environment:
+      LOCUS_ROLE: shell
+    entrypoint:
+      - /bin/bash
+      - -c
+      - |
+        echo "[smoke] started $(date -u +%FT%TZ) git=${LOCUS_GIT_SHA:-?} build=${LOCUS_BUILD_TIME:-?}"
+        while true; do
+          echo "[smoke] alive $(date -u +%FT%TZ) git=${LOCUS_GIT_SHA:-?}"
+          sleep 30
+        done
+    labels:
+      - com.centurylinklabs.watchtower.enable=true
+
+  watchtower:
+    image: containrrr/watchtower:latest
+    container_name: locus-smoke-watchtower
+    restart: always
+    environment:
+      WATCHTOWER_LABEL_ENABLE: "true"
+      WATCHTOWER_CLEANUP: "true"
+      WATCHTOWER_POLL_INTERVAL: "30"
+      WATCHTOWER_INCLUDE_RESTARTING: "true"
+      WATCHTOWER_TIMEOUT: "30s"
+      WATCHTOWER_DEBUG: "true"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${HOME}/.docker/config.json:/config.json:ro
+    command:
+      - --label-enable
+      - --interval=30
+      - --cleanup
+      - --debug

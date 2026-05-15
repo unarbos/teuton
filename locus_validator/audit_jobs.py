@@ -14,12 +14,12 @@ from locus_core.protocol import (
     GraphRef,
     JobManifestV3,
     JobReceiptV3,
-    MinerIdentity,
     VerificationPolicy,
     WorkerIdentity,
 )
 from locus_core.wallet_crypto import AssignmentEncryptor, DevAssignmentCrypto, Ed25519SealedBoxAssignmentCrypto
 from locus_orchestrator.scheduler import QuotaBook
+from locus_runtime.discovery import build_discovery_backend
 from locus_runtime.grants import broker_for_mode
 from locus_runtime.storage import ObjectStore
 from .verifier import ValidatorConfig, ReplayVerifier
@@ -37,6 +37,8 @@ class AuditJobConfig:
     sample_rate: float = 1.0
     assignment_crypto: str = "dev"
     network: str = "finney"
+    discovery_backend: str = "bucket"
+    discovery_heartbeat_ttl_sec: float | None = 30.0
 
 
 class AuditJobManager:
@@ -44,6 +46,14 @@ class AuditJobManager:
         self.bucket = bucket
         self.config = config
         self.quota = QuotaBook()
+        self.discovery = build_discovery_backend(
+            config.discovery_backend,
+            bucket=bucket,
+            netuid=config.netuid,
+            run_id=config.run_id,
+            role="audit",
+            heartbeat_ttl_sec=config.discovery_heartbeat_ttl_sec,
+        )
         self.grant_broker = broker_for_mode(config.grant_mode, bucket)
         self.assignment_crypto: AssignmentEncryptor = (
             Ed25519SealedBoxAssignmentCrypto()
@@ -82,21 +92,10 @@ class AuditJobManager:
         return emitted
 
     def discover_auditors(self) -> list[WorkerIdentity]:
-        prefix = self.bucket.uri_for_key(paths.auditors_prefix(self.config.netuid))
-        out: list[WorkerIdentity] = []
-        for uri in self.bucket.list(prefix):
-            if not uri.endswith("/heartbeat.json"):
-                continue
-            try:
-                data = self.bucket.get_json(uri)
-                if data.get("run_id") != self.config.run_id:
-                    continue
-                out.append(WorkerIdentity.from_dict(data["worker"]))
-            except Exception:
-                continue
-        identities = [MinerIdentity(netuid=self.config.netuid, hotkey_ss58=w.hotkey_ss58) for w in out]
-        self.quota.update_workers(identities, out)
-        return out
+        records = self.discovery.discover_workers()
+        workers = [record.worker for record in records]
+        self.quota.update_workers([record.miner for record in records], workers)
+        return workers
 
     def emit_audit_job(self, receipt_uri: str, receipt: JobReceiptV3, target: JobManifestV3, job_id: str) -> JobManifestV3:
         worker = self.quota.pick_worker()

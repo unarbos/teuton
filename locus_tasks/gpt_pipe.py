@@ -957,6 +957,36 @@ def bootstrap(*, bucket: LocalBucket, run_id: str, max_rounds: int) -> None:
     if n_blocks_env:
         global N_BLOCKS_PER_STAGE
         N_BLOCKS_PER_STAGE = max(int(n_blocks_env), 1)
+    # Model dimension knobs: bootstrap writes these into manifest_config so
+    # miners pick them up from the bucket; only the orchestrator needs the env.
+    d_env = _os.environ.get("GPT_PIPE_D")
+    if d_env:
+        global D
+        D = int(d_env)
+    nh_env = _os.environ.get("GPT_PIPE_N_HEAD")
+    if nh_env:
+        global N_HEAD
+        N_HEAD = int(nh_env)
+    dff_env = _os.environ.get("GPT_PIPE_D_FF")
+    if dff_env:
+        global D_FF
+        D_FF = int(dff_env)
+    b_env = _os.environ.get("GPT_PIPE_B")
+    if b_env:
+        global B
+        B = int(b_env)
+    t_env = _os.environ.get("GPT_PIPE_T")
+    if t_env:
+        global T
+        T = int(t_env)
+    n_mb_env = _os.environ.get("GPT_PIPE_N_MICROBATCHES")
+    if n_mb_env:
+        global N_MICROBATCHES
+        N_MICROBATCHES = max(int(n_mb_env), 1)
+    n_stages_env = _os.environ.get("GPT_PIPE_N_STAGES")
+    if n_stages_env:
+        global N_STAGES
+        N_STAGES = max(int(n_stages_env), 1)
 
     bucket.put_json(
         bucket.uri_for_key(paths.manifest_config_key(run_id)),

@@ -12,6 +12,7 @@ from pathlib import Path
 from locus_core import paths
 from locus_core.protocol import AssignmentGrantV3, EncryptedAssignmentGrantV3, JobManifestV3, MinerIdentity, WorkerIdentity
 from locus_core.wallet_crypto import AssignmentDecryptor, DevAssignmentCrypto, Ed25519SealedBoxAssignmentCrypto
+from locus_runtime.discovery import build_discovery_backend
 from locus_runtime.distributed_executor import DistributedJobExecutor
 from locus_runtime.executor import JobExecutor
 from locus_runtime.storage import ObjectStore
@@ -39,6 +40,7 @@ class WorkerConfig:
     wallet_path: str = "~/.bittensor/wallets"
     wallet_name: str = ""
     hotkey_name: str = ""
+    discovery_backend: str = "bucket"
     max_idle_iters: int | None = None
 
 
@@ -55,6 +57,12 @@ class MinerWorker:
             self.executor = JobExecutor(bucket=bucket, device=config.device, encryption_secret=config.encryption_secret, transport=transport)
         self.transport = transport
         self.assignment_crypto: AssignmentDecryptor = self._assignment_decryptor()
+        self.discovery = build_discovery_backend(
+            config.discovery_backend,
+            bucket=bucket,
+            netuid=config.netuid,
+            run_id=config.run_id,
+        )
         self.capabilities = detect_capabilities(
             bucket,
             run_id=config.run_id,
@@ -236,12 +244,4 @@ class MinerWorker:
             hotkey_ss58=self.config.hotkey_ss58,
             capabilities=dict(self.capabilities),
         )
-        self.bucket.put_json(
-            self.bucket.uri_for_key(paths.worker_heartbeat_key(self.config.netuid, self.config.hotkey_ss58, self.config.worker_id)),
-            {
-                "miner": info.to_dict(),
-                "worker": self.identity.to_dict(),
-                "run_id": self.config.run_id,
-                "last_seen_unix": int(now),
-            },
-        )
+        self.discovery.advertise_worker(miner=info, worker=self.identity)

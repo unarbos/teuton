@@ -1,9 +1,17 @@
 """Quota-aware scheduling primitives for Locus v3."""
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 
 from locus_core.protocol import MinerIdentity, ResourceRequirements, WorkerIdentity
+
+
+# `StreamingRunManager` never releases quota (it polls bucket for output blobs
+# instead of calling `quota.release` per receipt), so a tight per-account quota
+# stalls the orchestrator after a single epoch. We allow operators to widen
+# the default via env until that path is fixed properly.
+_DEFAULT_BASE_QUOTA = float(os.environ.get("LOCUS_BASE_QUOTA", "1000.0"))
 
 
 @dataclass
@@ -13,7 +21,7 @@ class MinerAccount:
     inflight_cu: float = 0.0
     verified_good_cu: float = 0.0
     trust_multiplier: float = 1.0
-    base_quota: float = 5.0
+    base_quota: float = _DEFAULT_BASE_QUOTA
 
     @property
     def max_inflight_cu(self) -> float:

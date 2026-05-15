@@ -1,0 +1,53 @@
+# Phase 1.5 smoke-test: a long-running container that prints the embedded
+# git SHA + build time every 5s, alongside Watchtower watching for new
+# locus:latest pushes on Docker Hub.
+#
+# Start:
+#   doppler run --project arbos --config dev -- bash -lc \
+#     'echo $DOCKER_PAT | docker login -u $DOCKER_USER --password-stdin && \
+#      DOCKER_USER=$DOCKER_USER docker compose -f docker/compose.wt-test.yml up -d'
+#
+# Tail:
+#   docker logs -f locus-wt-test
+#
+# Trigger an update:
+#   1) touch any file (e.g. docker/entrypoint.sh)
+#   2) ./scripts/build_push.sh        (rebuilds + repushes :latest)
+#   3) within ~30-60s the Watchtower service will pull the new image and
+#      recreate locus-wt-test; the printed git_sha will change.
+name: locus-wt-test
+
+services:
+  locus-wt-test:
+    image: ${DOCKER_USER}/locus:latest
+    container_name: locus-wt-test
+    restart: always
+    pull_policy: always
+    entrypoint: ["/bin/bash", "-lc"]
+    command:
+      - |
+        while true; do
+          echo "[wt-test] $$(date -u +%FT%TZ) git_sha=$${LOCUS_GIT_SHA:-unknown} build=$${LOCUS_BUILD_TIME:-unknown}"
+          sleep 5
+        done
+    labels:
+      - com.centurylinklabs.watchtower.enable=true
+
+  watchtower:
+    image: containrrr/watchtower:latest
+    container_name: locus-wt-test-watchtower
+    restart: always
+    environment:
+      WATCHTOWER_LABEL_ENABLE: "true"
+      WATCHTOWER_CLEANUP: "true"
+      WATCHTOWER_INCLUDE_RESTARTING: "true"
+      WATCHTOWER_DEBUG: "true"
+      WATCHTOWER_POLL_INTERVAL: "30"
+      DOCKER_API_VERSION: "1.48"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${HOME}/.docker/config.json:/config.json:ro
+    command:
+      - --label-enable
+      - --interval=30
+      - --cleanup

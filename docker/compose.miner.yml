@@ -1,0 +1,89 @@
+# Miner host stack: one locus:miner container (1 GPU) + Watchtower.
+#
+# Deployed to a Lium remote by scripts/provision_miner.sh which:
+#   1. installs docker + nvidia-container-toolkit
+#   2. scp's the assigned hotkey to /root/.bittensor/wallets/locus_mining/hotkeys/
+#   3. writes /root/locus/.env with the per-host values
+#   4. docker login (PAT piped from Doppler)
+#   5. docker compose -f compose.miner.yml up -d
+#
+# Required env on the remote (via /root/locus/.env):
+#   DOCKER_USER, S3_BUCKET, S3_REGION, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY,
+#   LOCUS_NETUID (default 3), MINER_HOTKEY_SS58, MINER_HOTKEY_NAME,
+#   LOCUS_OWNER_SECRET, LOCUS_MINER_SECRET, LOCUS_ASSIGNMENT_SECRET
+#
+# RUN_ID is optional here: when unset, the image's baked LOCUS_BAKED_RUN_ID
+# (set at `docker build --build-arg LOCUS_RUN_ID=...`) is used. Set RUN_ID
+# in /root/locus/.env only when you need a per-host override.
+name: locus-miner
+
+services:
+  miner:
+    image: ${DOCKER_USER}/locus:miner
+    container_name: locus-miner
+    restart: always
+    pull_policy: always
+    runtime: nvidia
+    environment:
+      LOCUS_ROLE: miner
+      S3_BUCKET: ${S3_BUCKET}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_ENDPOINT_URL: ${S3_ENDPOINT_URL:-}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      LOCUS_OWNER_SECRET: ${LOCUS_OWNER_SECRET}
+      LOCUS_MINER_SECRET: ${LOCUS_MINER_SECRET}
+      LOCUS_ASSIGNMENT_SECRET: ${LOCUS_ASSIGNMENT_SECRET}
+      LOCUS_ASSIGNMENT_CRYPTO: ${LOCUS_ASSIGNMENT_CRYPTO:-ed25519}
+      # Optional runtime override of the run id. Empty/unset falls back to
+      # the image-baked LOCUS_BAKED_RUN_ID (resolved in entrypoint.sh).
+      LOCUS_RUN_ID: ${LOCUS_RUN_ID:-${RUN_ID:-}}
+      BT_WALLET_PATH: /root/.bittensor/wallets
+      BT_WALLET_NAME: ${MINER_WALLET_NAME:-locus_mining}
+      BT_HOTKEY_NAME: ${MINER_HOTKEY_NAME}
+    volumes:
+      - /root/.bittensor/wallets:/root/.bittensor/wallets:ro
+    command:
+      - --netuid=${LOCUS_NETUID:-3}
+      - --hotkey=${MINER_HOTKEY_SS58}
+      - --devices=${MINER_DEVICES:-cuda}
+      - --wallet-path=/root/.bittensor/wallets
+      - --wallet-name=${MINER_WALLET_NAME:-locus_mining}
+      - --hotkey-name=${MINER_HOTKEY_NAME}
+      - --grant-mode=presigned
+      - --assignment-crypto=ed25519
+      - --discovery-backend=bucket
+      - --poll-interval=0.5
+      - --s3-bucket=${S3_BUCKET}
+      - --s3-region=${S3_REGION:-us-east-1}
+      - --miner-secret=${LOCUS_MINER_SECRET}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    labels:
+      - com.centurylinklabs.watchtower.enable=true
+
+  watchtower:
+    image: containrrr/watchtower:latest
+    container_name: locus-watchtower
+    restart: always
+    environment:
+      WATCHTOWER_LABEL_ENABLE: "true"
+      WATCHTOWER_CLEANUP: "true"
+      WATCHTOWER_POLL_INTERVAL: "60"
+      WATCHTOWER_INCLUDE_RESTARTING: "true"
+      WATCHTOWER_TIMEOUT: "30s"
+      DOCKER_API_VERSION: "1.48"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /root/.docker/config.json:/config.json:ro
+    command:
+      - --label-enable
+      - --interval=60
+      - --cleanup

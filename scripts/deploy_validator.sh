@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# Bring up the local validator stack: orchestrator + validator-loop +
+# audit-jobs-loop + watchtower, with the teutonic wallet bind-mounted ro.
+#
+# Sources:
+#   - LOCUS_*, AWS_*, S3_* from /home/const/locus/.env
+#   - DOCKER_USER, DOCKER_PAT from Doppler arbos/dev
+#   - RUN_ID from /tmp/locus_sn3_run_id (or env)
+#
+# Usage:
+#   ./scripts/deploy_validator.sh [up|down|logs|ps]
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$REPO_ROOT"
+
+ACTION="${1:-up}"
+
+set -a
+source .env
+set +a
+
+export RUN_ID="${RUN_ID:-$(cat /tmp/locus_sn3_run_id 2>/dev/null)}"
+if [ -z "$RUN_ID" ]; then
+    echo "RUN_ID is empty; set it or write /tmp/locus_sn3_run_id" >&2
+    exit 2
+fi
+
+export LOCUS_NETUID="${LOCUS_NETUID:-3}"
+export VALIDATOR_WALLET_NAME="${VALIDATOR_WALLET_NAME:-teutonic}"
+export VALIDATOR_HOTKEY_NAME="${VALIDATOR_HOTKEY_NAME:-default}"
+export VALIDATOR_HOTKEY_SS58="${VALIDATOR_HOTKEY_SS58:-5E6yHkmZmSpBT5aa2rNZcmeYa1y3N9jw1h7g53oNPzMUpnqG}"
+export AUDIT_MODE="${AUDIT_MODE:-consume}"
+export AUDIT_SAMPLE_RATE="${AUDIT_SAMPLE_RATE:-0.2}"
+export AUDIT_MAX_JOBS="${AUDIT_MAX_JOBS:-50}"
+export AUDIT_JOBS_SLEEP_SEC="${AUDIT_JOBS_SLEEP_SEC:-15}"
+export LOCUS_LOOP_SLEEP_SEC="${LOCUS_LOOP_SLEEP_SEC:-30}"
+export ORCHESTRATOR_STEPS="${ORCHESTRATOR_STEPS:-1000000}"
+export ORCHESTRATOR_TIMEOUT_SEC="${ORCHESTRATOR_TIMEOUT_SEC:-31536000}"
+
+echo "RUN_ID=$RUN_ID  netuid=$LOCUS_NETUID  validator=$VALIDATOR_WALLET_NAME/$VALIDATOR_HOTKEY_NAME ($VALIDATOR_HOTKEY_SS58)"
+
+doppler run --project arbos --config dev -- bash -lc '
+    set -euo pipefail
+    test -n "${DOCKER_USER:-}" || { echo "DOCKER_USER missing from doppler" >&2; exit 1; }
+    test -n "${DOCKER_PAT:-}"  || { echo "DOCKER_PAT missing from doppler"  >&2; exit 1; }
+    echo "$DOCKER_PAT" | docker login -u "$DOCKER_USER" --password-stdin >/dev/null
+
+    export DOCKER_USER S3_BUCKET S3_REGION S3_ENDPOINT_URL \
+           AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY \
+           LOCUS_OWNER_SECRET LOCUS_MINER_SECRET LOCUS_VALIDATOR_SECRET \
+           LOCUS_ASSIGNMENT_SECRET LOCUS_ASSIGNMENT_CRYPTO \
+           LOCUS_NETUID RUN_ID \
+           VALIDATOR_WALLET_NAME VALIDATOR_HOTKEY_NAME VALIDATOR_HOTKEY_SS58 \
+           AUDIT_MODE AUDIT_SAMPLE_RATE AUDIT_MAX_JOBS AUDIT_JOBS_SLEEP_SEC \
+           LOCUS_LOOP_SLEEP_SEC ORCHESTRATOR_STEPS ORCHESTRATOR_TIMEOUT_SEC
+
+    case "'"$ACTION"'" in
+        up)    docker compose -f docker/compose.validator.yml pull
+               docker compose -f docker/compose.validator.yml up -d
+               docker compose -f docker/compose.validator.yml ps ;;
+        down)  docker compose -f docker/compose.validator.yml down ;;
+        logs)  docker compose -f docker/compose.validator.yml logs --tail=80 ;;
+        ps)    docker compose -f docker/compose.validator.yml ps ;;
+        *)     echo "unknown action: '"$ACTION"'" >&2; exit 2 ;;
+    esac
+'

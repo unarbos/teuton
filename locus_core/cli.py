@@ -46,6 +46,29 @@ def build_crypto_policy(args) -> ArtifactCryptoPolicy | None:
     )
 
 
+def discovery_heartbeat_ttl(args) -> float | None:
+    ttl = getattr(args, "discovery_heartbeat_ttl_sec", 30.0)
+    return float(ttl) if ttl and ttl > 0 else None
+
+
+def require_run_id(args: argparse.Namespace) -> str:
+    """Resolve the effective run id for long-running role CLIs.
+
+    The argparse default already pulls from $LOCUS_RUN_ID (set by the
+    container entrypoint, which itself prefers compose overrides then the
+    image-baked value). We still error here if nothing was supplied so that
+    operators get a clear message instead of silently mining run_id="".
+    """
+    run_id = (getattr(args, "run_id", "") or "").strip()
+    if not run_id:
+        raise SystemExit(
+            "error: --run-id is empty. Provide --run-id, set LOCUS_RUN_ID/RUN_ID "
+            "in the environment, or rebuild the image with --build-arg LOCUS_RUN_ID=..."
+        )
+    args.run_id = run_id
+    return run_id
+
+
 def cmd_local_smoke(args: argparse.Namespace) -> int:
     root = args.local_root or tempfile.mkdtemp(prefix="locus-v3-")
     bucket = open_local_bucket(root, args.bucket)
@@ -66,6 +89,7 @@ def cmd_local_smoke(args: argparse.Namespace) -> int:
                     miner_secret=args.miner_secret,
                     encryption_secret=args.encryption_secret,
                     assignment_crypto=args.assignment_crypto,
+                    discovery_backend=args.discovery_backend,
                 ),
             )
         )
@@ -88,6 +112,8 @@ def cmd_local_smoke(args: argparse.Namespace) -> int:
             assignment_secret=args.assignment_secret,
             assignment_crypto=args.assignment_crypto,
             network=args.network,
+            discovery_backend=args.discovery_backend,
+            discovery_heartbeat_ttl_sec=discovery_heartbeat_ttl(args),
         ),
     )
     orch.run_loop(timeout_sec=args.timeout_sec)
@@ -114,6 +140,7 @@ def cmd_local_smoke(args: argparse.Namespace) -> int:
 
 
 def cmd_orchestrator(args: argparse.Namespace) -> int:
+    require_run_id(args)
     bucket = build_bucket(args)
     if args.task in {"gpt_pipe"}:
         manager = StreamingRunManager(
@@ -130,6 +157,8 @@ def cmd_orchestrator(args: argparse.Namespace) -> int:
                 assignment_secret=args.assignment_secret,
                 assignment_crypto=args.assignment_crypto,
                 network=args.network,
+                discovery_backend=args.discovery_backend,
+                discovery_heartbeat_ttl_sec=discovery_heartbeat_ttl(args),
             ),
         )
         manager.run_loop(poll_interval=args.poll_interval, timeout_sec=args.timeout_sec)
@@ -148,6 +177,8 @@ def cmd_orchestrator(args: argparse.Namespace) -> int:
             assignment_secret=args.assignment_secret,
             assignment_crypto=args.assignment_crypto,
             network=args.network,
+            discovery_backend=args.discovery_backend,
+            discovery_heartbeat_ttl_sec=discovery_heartbeat_ttl(args),
         ),
     )
     manager.run_loop(poll_interval=args.poll_interval, timeout_sec=args.timeout_sec)
@@ -155,6 +186,7 @@ def cmd_orchestrator(args: argparse.Namespace) -> int:
 
 
 def cmd_miner(args: argparse.Namespace) -> int:
+    require_run_id(args)
     bucket = build_bucket(args)
     devices = args.devices.split(",") if args.devices else ["cpu"]
     device_group = args.device_group.split(",") if args.device_group else None
@@ -177,6 +209,7 @@ def cmd_miner(args: argparse.Namespace) -> int:
             wallet_path=args.wallet_path,
             wallet_name=args.wallet_name,
             hotkey_name=args.hotkey_name,
+            discovery_backend=args.discovery_backend,
         ),
     )
     try:
@@ -187,6 +220,7 @@ def cmd_miner(args: argparse.Namespace) -> int:
 
 
 def cmd_validator(args: argparse.Namespace) -> int:
+    require_run_id(args)
     bucket = build_bucket(args)
     validator = ValidatorNeuron(
         bucket=bucket,
@@ -213,6 +247,7 @@ def cmd_validator(args: argparse.Namespace) -> int:
 
 
 def cmd_audit_jobs(args: argparse.Namespace) -> int:
+    require_run_id(args)
     bucket = build_bucket(args)
     manager = AuditJobManager(
         bucket=bucket,
@@ -227,6 +262,8 @@ def cmd_audit_jobs(args: argparse.Namespace) -> int:
             grant_mode=args.grant_mode,
             grant_ttl_sec=args.grant_ttl_sec,
             sample_rate=args.sample_rate,
+            discovery_backend=args.discovery_backend,
+            discovery_heartbeat_ttl_sec=discovery_heartbeat_ttl(args),
         ),
     )
     emitted = manager.run_once(max_jobs=args.max_jobs)
@@ -254,6 +291,26 @@ def cmd_ledger(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_discovery_ui(args: argparse.Namespace) -> int:
+    from locus_core.discovery_ui import serve_discovery_ui
+
+    bucket = build_bucket(args)
+    serve_discovery_ui(
+        bucket=bucket,
+        netuid=args.netuid,
+        run_id=args.run_id or None,
+        heartbeat_ttl_sec=discovery_heartbeat_ttl(args),
+        refresh_sec=args.refresh_sec,
+        snapshot_cache_sec=args.snapshot_cache_sec,
+        max_jobs=args.max_jobs,
+        max_artifacts=args.max_artifacts,
+        host=args.host,
+        port=args.port,
+        open_browser=args.open_browser,
+    )
+    return 0
+
+
 def add_bucket_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--local-root", default="/tmp/locus-v3")
     p.add_argument("--bucket", default="locus-v3")
@@ -276,6 +333,16 @@ def add_grant_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--grant-ttl-sec", type=int, default=600)
     p.add_argument("--assignment-secret", default=os.environ.get("LOCUS_ASSIGNMENT_SECRET", "locus-dev-assignment"))
     p.add_argument("--assignment-crypto", choices=["dev", "ed25519"], default=os.environ.get("LOCUS_ASSIGNMENT_CRYPTO", "dev"))
+
+
+def add_discovery_args(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--discovery-backend", choices=["bucket"], default=os.environ.get("LOCUS_DISCOVERY_BACKEND", "bucket"))
+    p.add_argument(
+        "--discovery-heartbeat-ttl-sec",
+        type=float,
+        default=float(os.environ.get("LOCUS_DISCOVERY_HEARTBEAT_TTL_SEC") or "30"),
+        help="Seconds before a discovery heartbeat is treated as stale. Use 0 to disable.",
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -302,12 +369,17 @@ def build_parser() -> argparse.ArgumentParser:
     smoke.add_argument("--encryption-secret", default=os.environ.get("LOCUS_ENCRYPTION_SECRET", "locus-dev-encryption"))
     add_crypto_args(smoke)
     add_grant_args(smoke)
+    add_discovery_args(smoke)
     smoke.set_defaults(fn=cmd_local_smoke)
 
     orch = sub.add_parser("orchestrator")
     add_bucket_args(orch)
     orch.add_argument("--netuid", type=int, default=0)
-    orch.add_argument("--run-id", required=True)
+    orch.add_argument(
+        "--run-id",
+        default=os.environ.get("LOCUS_RUN_ID", ""),
+        help="Defaults to $LOCUS_RUN_ID (set by entrypoint from compose override or image-baked value).",
+    )
     orch.add_argument("--task", default="mlp")
     orch.add_argument("--steps", type=int, default=1)
     orch.add_argument("--poll-interval", type=float, default=0.1)
@@ -316,12 +388,17 @@ def build_parser() -> argparse.ArgumentParser:
     orch.add_argument("--owner-secret", default=os.environ.get("LOCUS_OWNER_SECRET", "owner-dev-secret"))
     add_crypto_args(orch)
     add_grant_args(orch)
+    add_discovery_args(orch)
     orch.set_defaults(fn=cmd_orchestrator)
 
     miner = sub.add_parser("miner")
     add_bucket_args(miner)
     miner.add_argument("--netuid", type=int, default=0)
-    miner.add_argument("--run-id", required=True)
+    miner.add_argument(
+        "--run-id",
+        default=os.environ.get("LOCUS_RUN_ID", ""),
+        help="Defaults to $LOCUS_RUN_ID (set by entrypoint from compose override or image-baked value).",
+    )
     miner.add_argument("--hotkey", required=True)
     miner.add_argument("--devices", default="cpu")
     miner.add_argument("--device-group", default="", help="Comma-separated GPUs that should execute as one multi-GPU worker group.")
@@ -334,12 +411,17 @@ def build_parser() -> argparse.ArgumentParser:
     miner.add_argument("--wallet-name", default=os.environ.get("BT_WALLET_NAME", ""))
     miner.add_argument("--hotkey-name", default=os.environ.get("BT_HOTKEY_NAME", ""))
     add_grant_args(miner)
+    add_discovery_args(miner)
     miner.set_defaults(fn=cmd_miner)
 
     val = sub.add_parser("validator")
     add_bucket_args(val)
     val.add_argument("--netuid", type=int, default=0)
-    val.add_argument("--run-id", required=True)
+    val.add_argument(
+        "--run-id",
+        default=os.environ.get("LOCUS_RUN_ID", ""),
+        help="Defaults to $LOCUS_RUN_ID (set by entrypoint from compose override or image-baked value).",
+    )
     val.add_argument("--validator-hotkey", default="validator0")
     val.add_argument("--device", default="cpu")
     val.add_argument("--sample-rate", type=float, default=1.0)
@@ -359,13 +441,18 @@ def build_parser() -> argparse.ArgumentParser:
     audit = sub.add_parser("audit-jobs")
     add_bucket_args(audit)
     audit.add_argument("--netuid", type=int, default=0)
-    audit.add_argument("--run-id", required=True)
+    audit.add_argument(
+        "--run-id",
+        default=os.environ.get("LOCUS_RUN_ID", ""),
+        help="Defaults to $LOCUS_RUN_ID (set by entrypoint from compose override or image-baked value).",
+    )
     audit.add_argument("--validator-hotkey", default="validator0")
     audit.add_argument("--sample-rate", type=float, default=1.0)
     audit.add_argument("--max-jobs", type=int, default=None)
     audit.add_argument("--network", default="finney")
     audit.add_argument("--owner-secret", default=os.environ.get("LOCUS_OWNER_SECRET", "owner-dev-secret"))
     add_grant_args(audit)
+    add_discovery_args(audit)
     audit.set_defaults(fn=cmd_audit_jobs)
 
     wipe = sub.add_parser("wipe-run")
@@ -381,6 +468,20 @@ def build_parser() -> argparse.ArgumentParser:
     ledger.add_argument("--window-id", default=None)
     ledger.add_argument("--validator-secret", default=os.environ.get("LOCUS_VALIDATOR_SECRET", "validator-dev-secret"))
     ledger.set_defaults(fn=cmd_ledger)
+
+    discovery = sub.add_parser("discovery-ui")
+    add_bucket_args(discovery)
+    discovery.add_argument("--netuid", type=int, default=0)
+    discovery.add_argument("--run-id", default="", help="Optional run filter. Omit to show all active runs for the netuid.")
+    discovery.add_argument("--host", default="127.0.0.1")
+    discovery.add_argument("--port", type=int, default=8765)
+    discovery.add_argument("--open-browser", action="store_true")
+    discovery.add_argument("--refresh-sec", type=float, default=3.0)
+    discovery.add_argument("--snapshot-cache-sec", type=float, default=1.5)
+    discovery.add_argument("--max-jobs", type=int, default=500)
+    discovery.add_argument("--max-artifacts", type=int, default=300)
+    add_discovery_args(discovery)
+    discovery.set_defaults(fn=cmd_discovery_ui)
 
     return p
 

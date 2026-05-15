@@ -1,0 +1,125 @@
+# Local validator stack: orchestrator (emits training jobs) + validator loop
+# (replays receipts, publishes weights on netuid 3 finney) + audit-jobs loop
+# (emits replay tasks for the auditor box) + Watchtower.
+#
+# Run from the repo root via:
+#   doppler run --project arbos --config dev -- bash -lc \
+#     'echo $DOCKER_PAT | docker login -u $DOCKER_USER --password-stdin && \
+#      docker compose -f docker/compose.validator.yml up -d'
+#
+# Required env (passed in via doppler run / host .env):
+#   DOCKER_USER, DOCKER_PAT, S3_BUCKET, S3_REGION, AWS_ACCESS_KEY_ID,
+#   AWS_SECRET_ACCESS_KEY, LOCUS_NETUID (default 3),
+#   LOCUS_OWNER_SECRET, LOCUS_MINER_SECRET, LOCUS_VALIDATOR_SECRET,
+#   LOCUS_ASSIGNMENT_SECRET, VALIDATOR_HOTKEY_SS58,
+#   VALIDATOR_WALLET_NAME (default teutonic), VALIDATOR_HOTKEY_NAME (default default)
+#
+# RUN_ID is optional: when unset, the image's baked LOCUS_BAKED_RUN_ID
+# (set at `docker build --build-arg LOCUS_RUN_ID=...`) is used. Set RUN_ID
+# in /root/locus/.env only when you need a per-host override.
+name: locus-validator
+
+x-common-env: &common-env
+  S3_BUCKET: ${S3_BUCKET}
+  S3_REGION: ${S3_REGION:-us-east-1}
+  S3_ENDPOINT_URL: ${S3_ENDPOINT_URL:-}
+  AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+  AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+  LOCUS_NETUID: ${LOCUS_NETUID:-3}
+  # Optional runtime run-id override. Empty/unset falls back to the
+  # image-baked LOCUS_BAKED_RUN_ID (resolved in entrypoint.sh).
+  LOCUS_RUN_ID: ${LOCUS_RUN_ID:-${RUN_ID:-}}
+  LOCUS_OWNER_SECRET: ${LOCUS_OWNER_SECRET}
+  LOCUS_MINER_SECRET: ${LOCUS_MINER_SECRET}
+  LOCUS_VALIDATOR_SECRET: ${LOCUS_VALIDATOR_SECRET}
+  LOCUS_ASSIGNMENT_SECRET: ${LOCUS_ASSIGNMENT_SECRET}
+  LOCUS_ASSIGNMENT_CRYPTO: ${LOCUS_ASSIGNMENT_CRYPTO:-ed25519}
+  LOCUS_LOOP_SLEEP_SEC: ${LOCUS_LOOP_SLEEP_SEC:-30}
+  BT_WALLET_PATH: /root/.bittensor/wallets
+  BT_WALLET_NAME: ${VALIDATOR_WALLET_NAME:-teutonic}
+  BT_HOTKEY_NAME: ${VALIDATOR_HOTKEY_NAME:-default}
+
+x-common-volumes: &common-volumes
+  - ${HOME}/.bittensor/wallets:/root/.bittensor/wallets:ro
+
+services:
+  # NOTE: the orchestrator is intentionally NOT a service in this compose file.
+  # The orchestrator is dev-side code that we edit here in the repo and
+  # launch directly against the running fleet via `scripts/run_orchestrator.sh`
+  # (or `python -m locus_core.cli orchestrator ...`). Miners, validators and
+  # auditors are generic workers that pull job graphs from the bucket and
+  # execute them; they don't care what task is on the wire.
+  validator:
+    image: ${DOCKER_USER}/locus:validator
+    container_name: locus-validator
+    restart: always
+    pull_policy: always
+    environment:
+      <<: *common-env
+      LOCUS_ROLE: validator
+    volumes: *common-volumes
+    command:
+      - --netuid=${LOCUS_NETUID:-3}
+      - --validator-hotkey=${VALIDATOR_HOTKEY_SS58}
+      - --wallet-name=${VALIDATOR_WALLET_NAME:-teutonic}
+      - --hotkey-name=${VALIDATOR_HOTKEY_NAME:-default}
+      - --network=finney
+      - --set-weights
+      - --publish-weights
+      - --sample-rate=1.0
+      - --max-receipts=500
+      - --audit-mode=${AUDIT_MODE:-consume}
+      - --s3-bucket=${S3_BUCKET}
+      - --s3-region=${S3_REGION:-us-east-1}
+      - --owner-secret=${LOCUS_OWNER_SECRET}
+      - --miner-secret=${LOCUS_MINER_SECRET}
+      - --validator-secret=${LOCUS_VALIDATOR_SECRET}
+    labels:
+      - com.centurylinklabs.watchtower.enable=true
+
+  audit-jobs:
+    image: ${DOCKER_USER}/locus:validator
+    container_name: locus-audit-jobs
+    restart: always
+    pull_policy: always
+    environment:
+      <<: *common-env
+      LOCUS_ROLE: audit-jobs
+      LOCUS_LOOP_SLEEP_SEC: ${AUDIT_JOBS_SLEEP_SEC:-15}
+      # Auditor hotkeys are NOT on the netuid 3 metagraph, so the ed25519
+      # sealed-grant path can't resolve them. Use dev (HMAC) crypto for the
+      # audit-jobs side; the auditor container uses the same shared secret.
+      LOCUS_ASSIGNMENT_CRYPTO: dev
+    volumes: *common-volumes
+    command:
+      - --netuid=${LOCUS_NETUID:-3}
+      - --validator-hotkey=${VALIDATOR_HOTKEY_SS58}
+      - --sample-rate=${AUDIT_SAMPLE_RATE:-0.2}
+      - --max-jobs=${AUDIT_MAX_JOBS:-50}
+      - --s3-bucket=${S3_BUCKET}
+      - --s3-region=${S3_REGION:-us-east-1}
+      - --grant-mode=presigned
+      - --assignment-crypto=dev
+      - --assignment-secret=${LOCUS_ASSIGNMENT_SECRET}
+      - --owner-secret=${LOCUS_OWNER_SECRET}
+    labels:
+      - com.centurylinklabs.watchtower.enable=true
+
+  watchtower:
+    image: containrrr/watchtower:latest
+    container_name: locus-watchtower
+    restart: always
+    environment:
+      WATCHTOWER_LABEL_ENABLE: "true"
+      WATCHTOWER_CLEANUP: "true"
+      WATCHTOWER_POLL_INTERVAL: "60"
+      WATCHTOWER_INCLUDE_RESTARTING: "true"
+      WATCHTOWER_TIMEOUT: "30s"
+      DOCKER_API_VERSION: "1.51"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${HOME}/.docker/config.json:/config.json:ro
+    command:
+      - --label-enable
+      - --interval=60
+      - --cleanup

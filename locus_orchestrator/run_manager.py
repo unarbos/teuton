@@ -7,8 +7,9 @@ from dataclasses import dataclass
 
 from locus_core import paths
 from locus_core.metagraph import BtcliMetagraphHotkeyResolver, MetagraphHotkeyResolver
-from locus_core.protocol import ArtifactCryptoPolicy, ArtifactRef, AssignmentGrantV3, EncryptedAssignmentGrantV3, GraphRef, JobManifestV3, MinerIdentity, ResourceRequirements, VerificationPolicy, WorkerIdentity
+from locus_core.protocol import ArtifactCryptoPolicy, ArtifactRef, AssignmentGrantV3, EncryptedAssignmentGrantV3, GraphRef, JobManifestV3, ResourceRequirements, VerificationPolicy, WorkerIdentity
 from locus_core.wallet_crypto import AssignmentEncryptor, DevAssignmentCrypto, Ed25519SealedBoxAssignmentCrypto
+from locus_runtime.discovery import build_discovery_backend
 from locus_runtime.grants import broker_for_mode, PresignedUrlBroker
 from locus_runtime import tensor_io
 from locus_runtime.storage import ObjectStore
@@ -29,6 +30,8 @@ class RunConfig:
     assignment_secret: str = "locus-dev-assignment"
     assignment_crypto: str = "dev"
     network: str = "finney"
+    discovery_backend: str = "bucket"
+    discovery_heartbeat_ttl_sec: float | None = 30.0
 
 
 class RunManager:
@@ -40,6 +43,13 @@ class RunManager:
         self.quota = QuotaBook()
         self.gate = CriticalGate()
         self.emitted: list[str] = []
+        self.discovery = build_discovery_backend(
+            config.discovery_backend,
+            bucket=bucket,
+            netuid=config.netuid,
+            run_id=config.run_id,
+            heartbeat_ttl_sec=config.discovery_heartbeat_ttl_sec,
+        )
         self.grant_broker = broker_for_mode(config.grant_mode, bucket)
         self.assignment_crypto: AssignmentEncryptor = (
             Ed25519SealedBoxAssignmentCrypto()
@@ -79,21 +89,10 @@ class RunManager:
         self._save_state({"run_id": self.config.run_id, "current_step": 0, "max_steps": self.config.max_steps})
 
     def discover_workers(self) -> list[WorkerIdentity]:
-        prefix = self.bucket.uri_for_key(paths.miners_prefix(self.config.netuid))
-        out: list[WorkerIdentity] = []
-        for uri in self.bucket.list(prefix):
-            if not uri.endswith("/heartbeat.json"):
-                continue
-            try:
-                data = self.bucket.get_json(uri)
-                if data.get("run_id") != self.config.run_id:
-                    continue
-                out.append(WorkerIdentity.from_dict(data["worker"]))
-            except Exception:
-                continue
-        identities = [MinerIdentity(netuid=self.config.netuid, hotkey_ss58=w.hotkey_ss58) for w in out]
-        self.quota.update_workers(identities, out)
-        return out
+        records = self.discovery.discover_workers()
+        workers = [record.worker for record in records]
+        self.quota.update_workers([record.miner for record in records], workers)
+        return workers
 
     def run_loop(self, *, poll_interval: float = 0.05, timeout_sec: float = 60.0) -> None:
         if not self.bucket.exists(self.bucket.uri_for_key(paths.state_key(self.config.netuid, self.config.run_id))):

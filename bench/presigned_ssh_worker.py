@@ -20,6 +20,7 @@ from locus_core.cli import build_bucket
 from locus_core.protocol import AssignmentGrantV3, EncryptedAssignmentGrantV3, JobManifestV3, JobReceiptV3, MinerIdentity, WorkerIdentity
 from locus_core.signatures import verify_dict
 from locus_core.wallet_crypto import DevAssignmentCrypto, Ed25519SealedBoxAssignmentCrypto
+from locus_runtime.discovery import build_discovery_backend
 from locus_runtime.distributed_executor import DistributedJobExecutor
 from locus_runtime.executor import JobExecutor
 from locus_runtime.storage import ObjectStore
@@ -105,20 +106,8 @@ def grants_by_uri(grant: AssignmentGrantV3) -> dict[str, Any]:
 
 def write_heartbeat(bucket: ObjectStore, *, netuid: int, run_id: str, worker: WorkerIdentity, role: str = "train") -> None:
     info = MinerIdentity(netuid=netuid, hotkey_ss58=worker.hotkey_ss58, capabilities={"transport": "ssh-presigned", "role": role})
-    key = (
-        paths.auditor_heartbeat_key(netuid, worker.hotkey_ss58, worker.worker_id)
-        if role == "audit"
-        else paths.worker_heartbeat_key(netuid, worker.hotkey_ss58, worker.worker_id)
-    )
-    bucket.put_json(
-        bucket.uri_for_key(key),
-        {
-            "miner": info.to_dict(),
-            "worker": worker.to_dict(),
-            "run_id": run_id,
-            "last_seen_unix": int(time.time()),
-        },
-    )
+    discovery = build_discovery_backend("bucket", bucket=bucket, netuid=netuid, run_id=run_id, role=role)
+    discovery.advertise_worker(miner=info, worker=worker)
 
 
 def decrypt_grant(
@@ -204,6 +193,7 @@ def dispatch_job(args: argparse.Namespace, bucket: ObjectStore, manifest: JobMan
         "worker": worker.to_dict(),
         "device": args.device,
         "device_group": args.device_group.split(",") if args.device_group else [args.device],
+        "miner_secret": args.miner_secret,
     }
     target = f"{args.user}@{args.host}"
     remote = "cd /root/locus && source .venv/bin/activate && python -m bench.presigned_ssh_worker execute"
@@ -238,7 +228,11 @@ def cmd_execute(args: argparse.Namespace) -> int:
         receipt = JobReceiptV3.from_dict(manifest.params["receipt"])
         result = AuditReplayRunner(
             bucket=bucket,
-            config=AuditReplayConfig(owner_secret="skip", miner_secret="hotkey", device=bundle["device"]),
+            config=AuditReplayConfig(
+                owner_secret="skip",
+                miner_secret=bundle.get("miner_secret", "hotkey"),
+                device=bundle["device"],
+            ),
             transport=transport,
             grants=grants_by_uri(grant),
         ).run(
@@ -288,6 +282,7 @@ def build_parser() -> argparse.ArgumentParser:
     dispatch.add_argument("--port", type=int, required=True)
     dispatch.add_argument("--user", default="root")
     dispatch.add_argument("--assignment-secret", required=True)
+    dispatch.add_argument("--miner-secret", default="hotkey")
     dispatch.add_argument("--assignment-crypto", choices=["dev", "ed25519"], default="dev")
     dispatch.add_argument("--wallet-path", default="~/.bittensor/wallets")
     dispatch.add_argument("--wallet-name", default="")

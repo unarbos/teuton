@@ -30,6 +30,7 @@ class MinerNeuronConfig:
     wallet_path: str = "~/.bittensor/wallets"
     wallet_name: str = ""
     hotkey_name: str = ""
+    discovery_backend: str = "bucket"
 
 
 class MinerNeuron:
@@ -58,6 +59,7 @@ class MinerNeuron:
                         wallet_path=config.wallet_path,
                         wallet_name=config.wallet_name,
                         hotkey_name=config.hotkey_name,
+                        discovery_backend=config.discovery_backend,
                     ),
                 )
             ]
@@ -82,6 +84,7 @@ class MinerNeuron:
                         wallet_path=config.wallet_path,
                         wallet_name=config.wallet_name,
                         hotkey_name=config.hotkey_name,
+                        discovery_backend=config.discovery_backend,
                     ),
                 )
                 for i, device in enumerate(config.devices)
