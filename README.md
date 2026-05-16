@@ -1,6 +1,6 @@
-# Locus v3
+# Teuton v3
 
-Locus v3 is the subnet-ready version of Locus: a bucket-native distributed
+Teuton v3 is the subnet-ready version of Teuton: a bucket-native distributed
 training runtime with explicit roles for an owner orchestrator, miners, and a
 validator. The mainnet deployment lives on Bittensor **netuid 3 (Finney)**.
 
@@ -21,7 +21,7 @@ The current v3 implementation supports:
 If you came here to contribute compute on netuid 3, jump straight to the
 **[Mining Guide](docs/mining.md)** — it covers wallet creation, ED25519 hotkey
 generation, on-chain registration, and starting the prebuilt
-`locus:miner` Docker image.
+`teuton:miner` Docker image.
 
 ## Dashboard
 
@@ -32,7 +32,7 @@ time.
 To run a local copy against the same bucket:
 
 ```bash
-locus-v3 discovery-ui --netuid 3 --port 8765 --open-browser
+teuton-v3 discovery-ui --netuid 3 --port 8765 --open-browser
 ```
 
 The public site is the same UI, fronted by a Cloudflare Tunnel. See the
@@ -68,13 +68,13 @@ source .venv/bin/activate
 Honest local run:
 
 ```bash
-locus-v3 local-smoke --steps 1 --miners 4
+teuton-v3 local-smoke --steps 1 --miners 4
 ```
 
 Adversarial local run:
 
 ```bash
-locus-v3 local-smoke \
+teuton-v3 local-smoke \
   --steps 1 \
   --miners 4 \
   --bad-miner-index 0 \
@@ -115,17 +115,17 @@ The repo ships a single image with three role tags, plus compose stacks for
 each role:
 
 ```text
-$DOCKER_USER/locus:miner      docker/compose.miner.yml
-$DOCKER_USER/locus:miner      docker/compose.multi-miner.yml   (multi-GPU host)
-$DOCKER_USER/locus:validator  docker/compose.validator.yml
-$DOCKER_USER/locus:auditor    docker/compose.auditor.yml
-$DOCKER_USER/locus:miner      docker/compose.dashboard.yml     (public dashboard via Cloudflare Tunnel)
+$DOCKER_USER/teuton:miner      docker/compose.miner.yml
+$DOCKER_USER/teuton:miner      docker/compose.multi-miner.yml   (multi-GPU host)
+$DOCKER_USER/teuton:validator  docker/compose.validator.yml
+$DOCKER_USER/teuton:auditor    docker/compose.auditor.yml
+$DOCKER_USER/teuton:miner      docker/compose.dashboard.yml     (public dashboard via Cloudflare Tunnel)
 ```
 
 Watchtower (included in each stack) polls Docker Hub every 60 s, so a
 `scripts/build_push.sh --run-id <id>` from the operator side rolls the whole
 fleet onto a new image and run id without touching any host. Miners only need
-to populate `/root/locus/.env` and the wallet hotkeys once; see the
+to populate `/root/teuton/.env` and the wallet hotkeys once; see the
 [Mining Guide](docs/mining.md) for the full step-by-step.
 
 ## Docs

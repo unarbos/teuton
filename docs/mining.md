@@ -1,7 +1,7 @@
 # Mining
 
 This guide walks a third-party operator through onboarding a GPU host as a
-Locus miner: generating a Bittensor wallet and an ED25519 hotkey, registering
+Teuton miner: generating a Bittensor wallet and an ED25519 hotkey, registering
 that hotkey on subnet 3 (Finney), and starting the miner so the orchestrator
 can hand it work.
 
@@ -11,7 +11,7 @@ The fleet runs on:
 - **netuid**: `3`
 - **hotkey type**: native ED25519 (`crypto_type=0`) — required for encrypted
   assignment grants
-- **runtime**: a single `locus:miner` Docker image; one container per GPU
+- **runtime**: a single `teuton:miner` Docker image; one container per GPU
 
 ## What A Miner Does
 
@@ -50,24 +50,24 @@ Bittensor:
 - A funded coldkey with enough TAO to cover the registration burn on netuid 3
   (the current burn is printed before any extrinsic is submitted).
 
-Operator-supplied credentials (you will get these from the Locus team):
+Operator-supplied credentials (you will get these from the Teuton team):
 
 - An S3 bucket name, region, and a pair of AWS keys with read/write to the
   `v3/netuid=3/...` prefix.
 - The three shared HMAC secrets used by the dev signature scheme:
-  `LOCUS_OWNER_SECRET`, `LOCUS_MINER_SECRET`, `LOCUS_ASSIGNMENT_SECRET`.
+  `TEUTON_OWNER_SECRET`, `TEUTON_MINER_SECRET`, `TEUTON_ASSIGNMENT_SECRET`.
 
 > Without those four credentials the miner cannot read manifests or write
 > receipts. Reach out to coordinate before you generate keys so you do not
 > burn TAO on a hotkey that will sit idle.
 
-## 1. Install Locus And Bittensor
+## 1. Install Teuton And Bittensor
 
 Clone the repo:
 
 ```bash
-git clone https://github.com/unarbos/locus.git
-cd locus
+git clone https://github.com/unarbos/teuton.git
+cd teuton
 ```
 
 Install with `uv` (this builds the patched `bittensor-wallet` from source, so
@@ -82,7 +82,7 @@ Verify the toolchain:
 
 ```bash
 btcli --version
-locus-v3 --help
+teuton-v3 --help
 python -c "import bittensor as bt; print(bt.__version__)"
 ```
 
@@ -91,26 +91,26 @@ If `btcli --version` fails, run `uv pip install bittensor-cli` and retry.
 ## 2. Create A Bittensor Coldkey
 
 The coldkey holds funds and authorizes registration. Pick any name you like;
-this guide uses `locus_mining`.
+this guide uses `teuton_mining`.
 
 ```bash
 btcli wallet new-coldkey \
-    --wallet-name locus_mining \
+    --wallet-name teuton_mining \
     --n-words 24
 ```
 
 You will be prompted for a password and shown a 24-word mnemonic. **Write
 the mnemonic down offline.** If you lose it, the funds are unrecoverable.
 
-The coldkey now lives at `~/.bittensor/wallets/locus_mining/coldkey`.
+The coldkey now lives at `~/.bittensor/wallets/teuton_mining/coldkey`.
 
 Fund the coldkey's SS58 address with enough TAO to cover the registration
 burn for every hotkey you plan to register, plus a small fee buffer
-(`btcli wallet overview --wallet-name locus_mining` will print the address).
+(`btcli wallet overview --wallet-name teuton_mining` will print the address).
 
 ## 3. Generate ED25519 Miner Hotkeys
 
-Locus encrypts assignment grants to each miner's hotkey using ED25519 →
+Teuton encrypts assignment grants to each miner's hotkey using ED25519 →
 X25519. The default `btcli wallet new_hotkey` command produces an `sr25519`
 hotkey, which **cannot** decrypt those grants. Use the helper script
 instead — it calls `bittensor_wallet.Wallet.create_new_hotkey(crypto_type=0)`
@@ -120,23 +120,23 @@ For one hotkey:
 
 ```bash
 python scripts/generate_ed25519_hotkey.py \
-    --wallet-name locus_mining \
-    --hotkey      locus_miner_sn3_1
+    --wallet-name teuton_mining \
+    --hotkey      teuton_miner_sn3_1
 ```
 
 For N hotkeys at once (also handles registration in a single pass; covered
 in the next step):
 
 ```bash
-./scripts/register_miners.sh --wallet locus_mining \
-    --prefix locus_miner_sn3_ --start 1 --n 4 --dry-run
+./scripts/register_miners.sh --wallet teuton_mining \
+    --prefix teuton_miner_sn3_ --start 1 --n 4 --dry-run
 ```
 
 The generator writes:
 
 ```text
-~/.bittensor/wallets/locus_mining/hotkeys/locus_miner_sn3_1        (private)
-~/.bittensor/wallets/locus_mining/hotkeys/locus_miner_sn3_1pub.txt (public ss58 + cryptoType=0)
+~/.bittensor/wallets/teuton_mining/hotkeys/teuton_miner_sn3_1        (private)
+~/.bittensor/wallets/teuton_mining/hotkeys/teuton_miner_sn3_1pub.txt (public ss58 + cryptoType=0)
 ```
 
 It prints the SS58 address and confirms `encryption_self_test: ok`. Save
@@ -156,8 +156,8 @@ You can register one at a time with `btcli`:
 btcli subnets register \
     --netuid 3 \
     --network finney \
-    --wallet-name locus_mining \
-    --wallet-hotkey locus_miner_sn3_1
+    --wallet-name teuton_mining \
+    --wallet-hotkey teuton_miner_sn3_1
 ```
 
 `btcli` prints the recycle (burn) cost in TAO and asks for confirmation
@@ -168,20 +168,20 @@ the metagraph and does an explicit cost check before spending anything):
 
 ```bash
 # Confirm the plan and the total burn cost without registering:
-./scripts/register_miners.sh --wallet locus_mining \
-    --prefix locus_miner_sn3_ --start 1 --n 4 --dry-run
+./scripts/register_miners.sh --wallet teuton_mining \
+    --prefix teuton_miner_sn3_ --start 1 --n 4 --dry-run
 
 # Register for real (needs the coldkey password to unlock once):
-LOCUS_MINING_COLDKEY_PW='your-coldkey-password' \
-    ./scripts/register_miners.sh --wallet locus_mining \
-        --prefix locus_miner_sn3_ --start 1 --n 4 --yes
+TEUTON_MINING_COLDKEY_PW='your-coldkey-password' \
+    ./scripts/register_miners.sh --wallet teuton_mining \
+        --prefix teuton_miner_sn3_ --start 1 --n 4 --yes
 ```
 
 After it finishes, verify:
 
 ```bash
 btcli subnets metagraph --netuid 3 --network finney \
-    | grep -i "$(cat ~/.bittensor/wallets/locus_mining/hotkeys/locus_miner_sn3_1pub.txt | jq -r .ss58Address)"
+    | grep -i "$(cat ~/.bittensor/wallets/teuton_mining/hotkeys/teuton_miner_sn3_1pub.txt | jq -r .ss58Address)"
 ```
 
 You should see your hotkey listed with a UID. Send the SS58s to the
@@ -189,7 +189,7 @@ operator so they can add them to the assignment plan.
 
 ## 5. Get Operator Credentials
 
-From the Locus operator you will need:
+From the Teuton operator you will need:
 
 | Variable                  | Why                                                          |
 | ------------------------- | ------------------------------------------------------------ |
@@ -197,10 +197,10 @@ From the Locus operator you will need:
 | `S3_REGION`               | Bucket region (defaults to `us-east-1`).                      |
 | `AWS_ACCESS_KEY_ID`       | Read jobs/grants, write receipts.                             |
 | `AWS_SECRET_ACCESS_KEY`   | Pair for the access key.                                      |
-| `LOCUS_OWNER_SECRET`      | Verify orchestrator signatures on manifests.                  |
-| `LOCUS_MINER_SECRET`      | Sign your receipts.                                           |
-| `LOCUS_ASSIGNMENT_SECRET` | Authenticate encrypted assignment envelopes.                  |
-| `DOCKER_USER` / `DOCKER_PAT` | (Docker path) pull the prebuilt `locus:miner` image.        |
+| `TEUTON_OWNER_SECRET`      | Verify orchestrator signatures on manifests.                  |
+| `TEUTON_MINER_SECRET`      | Sign your receipts.                                           |
+| `TEUTON_ASSIGNMENT_SECRET` | Authenticate encrypted assignment envelopes.                  |
+| `DOCKER_USER` / `DOCKER_PAT` | (Docker path) pull the prebuilt `teuton:miner` image.        |
 
 The miner only needs read+write under `v3/netuid=3/`. Operators usually
 hand out a scoped IAM key — do not commit the secret anywhere.
@@ -213,42 +213,42 @@ the operator pushes a new image.
 
 ### Single-GPU host
 
-Create `/root/locus/.env` on the host:
+Create `/root/teuton/.env` on the host:
 
 ```bash
-mkdir -p /root/locus
-cat > /root/locus/.env <<'EOF'
+mkdir -p /root/teuton
+cat > /root/teuton/.env <<'EOF'
 DOCKER_USER=<operator-supplied>
 S3_BUCKET=<operator-supplied>
 S3_REGION=us-east-1
 AWS_ACCESS_KEY_ID=<operator-supplied>
 AWS_SECRET_ACCESS_KEY=<operator-supplied>
 
-LOCUS_NETUID=3
-LOCUS_OWNER_SECRET=<operator-supplied>
-LOCUS_MINER_SECRET=<operator-supplied>
-LOCUS_ASSIGNMENT_SECRET=<operator-supplied>
-LOCUS_ASSIGNMENT_CRYPTO=ed25519
+TEUTON_NETUID=3
+TEUTON_OWNER_SECRET=<operator-supplied>
+TEUTON_MINER_SECRET=<operator-supplied>
+TEUTON_ASSIGNMENT_SECRET=<operator-supplied>
+TEUTON_ASSIGNMENT_CRYPTO=ed25519
 
-MINER_WALLET_NAME=locus_mining
-MINER_HOTKEY_NAME=locus_miner_sn3_1
+MINER_WALLET_NAME=teuton_mining
+MINER_HOTKEY_NAME=teuton_miner_sn3_1
 MINER_HOTKEY_SS58=<ss58 from step 3>
 MINER_DEVICES=cuda
 EOF
-chmod 600 /root/locus/.env
+chmod 600 /root/teuton/.env
 ```
 
 Make sure your hotkey files are at
-`/root/.bittensor/wallets/locus_mining/hotkeys/<MINER_HOTKEY_NAME>{,pub.txt}`.
+`/root/.bittensor/wallets/teuton_mining/hotkeys/<MINER_HOTKEY_NAME>{,pub.txt}`.
 The compose file mounts that directory read-only into the container; the
 files never leave the host.
 
-Copy `docker/compose.miner.yml` from this repo to `/root/locus/compose.yml`
+Copy `docker/compose.miner.yml` from this repo to `/root/teuton/compose.yml`
 and start the stack:
 
 ```bash
 echo "$DOCKER_PAT" | docker login -u "$DOCKER_USER" --password-stdin
-cd /root/locus
+cd /root/teuton
 docker compose pull
 docker compose up -d
 docker compose logs -f miner
@@ -270,16 +270,16 @@ to add more.
 The orchestrator coordinates everyone with a `run_id`. Two ways to set it:
 
 1. **Image-baked (default).** The operator builds and pushes the image with
-   `docker build --build-arg LOCUS_RUN_ID=<id>`. Watchtower picks it up and
-   the entrypoint resolves `LOCUS_RUN_ID` from `LOCUS_BAKED_RUN_ID`.
-2. **Per-host override.** Set `LOCUS_RUN_ID=<id>` (or `RUN_ID=<id>`) in
-   `/root/locus/.env` to pin a single host to a specific run.
+   `docker build --build-arg TEUTON_RUN_ID=<id>`. Watchtower picks it up and
+   the entrypoint resolves `TEUTON_RUN_ID` from `TEUTON_BAKED_RUN_ID`.
+2. **Per-host override.** Set `TEUTON_RUN_ID=<id>` (or `RUN_ID=<id>`) in
+   `/root/teuton/.env` to pin a single host to a specific run.
 
 If neither is set, the miner refuses to start with:
 
 ```text
-error: --run-id is empty. Provide --run-id, set LOCUS_RUN_ID/RUN_ID
-in the environment, or rebuild the image with --build-arg LOCUS_RUN_ID=...
+error: --run-id is empty. Provide --run-id, set TEUTON_RUN_ID/RUN_ID
+in the environment, or rebuild the image with --build-arg TEUTON_RUN_ID=...
 ```
 
 ## 6 (alt). Run The Miner Without Docker
@@ -292,16 +292,16 @@ export S3_BUCKET=...
 export S3_REGION=us-east-1
 export AWS_ACCESS_KEY_ID=...
 export AWS_SECRET_ACCESS_KEY=...
-export LOCUS_OWNER_SECRET=...
-export LOCUS_MINER_SECRET=...
-export LOCUS_ASSIGNMENT_SECRET=...
+export TEUTON_OWNER_SECRET=...
+export TEUTON_MINER_SECRET=...
+export TEUTON_ASSIGNMENT_SECRET=...
 
-locus-v3 miner \
+teuton-v3 miner \
     --netuid 3 \
-    --run-id   "$LOCUS_RUN_ID" \
+    --run-id   "$TEUTON_RUN_ID" \
     --hotkey   "<miner ss58>" \
-    --hotkey-name locus_miner_sn3_1 \
-    --wallet-name locus_mining \
+    --hotkey-name teuton_miner_sn3_1 \
+    --wallet-name teuton_mining \
     --wallet-path "$HOME/.bittensor/wallets" \
     --devices cuda \
     --grant-mode presigned \
@@ -341,7 +341,7 @@ Three signals to check, in order:
    You can also run the same UI locally:
 
    ```bash
-   locus-v3 discovery-ui --netuid 3 --port 8765 --open-browser
+   teuton-v3 discovery-ui --netuid 3 --port 8765 --open-browser
    ```
 
 3. **Receipts.** Once the orchestrator schedules a job to your hotkey, you
@@ -362,7 +362,7 @@ Production miners always use `presigned`:
 - `direct` — process already holds bucket credentials and uses them for
   every read/write (dev only).
 - `local` — encrypted grants resolve to local/direct ops; useful for
-  `locus-v3 local-smoke` runs that exercise the grant code path without S3.
+  `teuton-v3 local-smoke` runs that exercise the grant code path without S3.
 - `presigned` — encrypted grants embed presigned S3 GET/PUT URLs scoped to
   the exact input/output URIs of one job. The miner decrypts the envelope,
   verifies it matches the public manifest, and uses those URLs only.
@@ -404,7 +404,7 @@ fail validation. Do **not** run these against a real bucket — your hotkey
 will get scored to zero.
 
 ```bash
-locus-v3 miner \
+teuton-v3 miner \
     --run-id   RUN_ID \
     --hotkey   BAD_MINER \
     --devices  cuda \
@@ -417,8 +417,8 @@ Supported modes: `partial_corrupt`, `wrong_output`, `skip_compute`.
 ## Troubleshooting
 
 - **`error: --run-id is empty`** — the entrypoint could not resolve a run id.
-  Set `LOCUS_RUN_ID=` (or `RUN_ID=`) in `/root/locus/.env`, or pull a fresh
-  image whose `LOCUS_BAKED_RUN_ID` is populated.
+  Set `TEUTON_RUN_ID=` (or `RUN_ID=`) in `/root/teuton/.env`, or pull a fresh
+  image whose `TEUTON_BAKED_RUN_ID` is populated.
 - **`AssignmentDecryptError` / `cannot decrypt grant`** — the hotkey on disk
   is not ED25519. Re-generate with `scripts/generate_ed25519_hotkey.py` and
   re-register. Confirm `pub.txt` shows `"cryptoType": 0`.

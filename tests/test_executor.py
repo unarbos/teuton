@@ -4,10 +4,10 @@ import json
 
 import torch
 
-from locus_core.ir import GraphBuilder
-from locus_core.protocol import ArtifactRef, GraphRef, JobManifestV3, VerificationPolicy, WorkerIdentity
-from locus_runtime import tensor_io
-from locus_runtime.executor import JobExecutor
+from teuton_core.ir import GraphBuilder
+from teuton_core.protocol import ArtifactRef, GraphRef, JobManifestV3, VerificationPolicy, WorkerIdentity
+from teuton_runtime import tensor_io
+from teuton_runtime.executor import JobExecutor
 
 
 def _double_graph(json_output: bool = False):

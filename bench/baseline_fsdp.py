@@ -3,14 +3,14 @@
 Runs a configurable GPT (100M / 300M / 1B) on a single multi-GPU box
 (intended target: 8xH200), using FSDP for sharded parameters + activation
 recomputation. Trains on the FineWeb-edu tokens.bin we built with
-`locus.data.fineweb_loader`. Emits a JSON with tokens/sec, val_loss,
+`teuton.data.fineweb_loader`. Emits a JSON with tokens/sec, val_loss,
 $/billion-tokens for the chosen reference price.
 
 Usage:
     # Quick smoke (single GPU, 100M, 100 steps):
     python bench/baseline_fsdp.py run \\
         --size 100M --n-steps 100 \\
-        --tokens /tmp/locus_data/tokens.bin \\
+        --tokens /tmp/teuton_data/tokens.bin \\
         --out /tmp/baseline_100m.json
 
     # Real 8xH200 run via torchrun:
@@ -199,15 +199,15 @@ class GPT(nn.Module):
 
 
 def _load_tokens(path: str) -> torch.Tensor:
-    """Load tokens.bin produced by locus.data.fineweb_loader. Format: a
-    Locus tensor_io blob (header + payload). Falls back to raw int32/uint16
+    """Load tokens.bin produced by teuton.data.fineweb_loader. Format: a
+    Teuton tensor_io blob (header + payload). Falls back to raw int32/uint16
     np.fromfile for portability."""
     p = Path(path)
     body = p.read_bytes()
-    # Try Locus tensor_io decoding first (for files written via cli.prepare).
+    # Try Teuton tensor_io decoding first (for files written via cli.prepare).
     try:
-        sys.path.insert(0, str(p.parent.parent / "Locus" / "Locus"))  # best-effort
-        from locus import tensor_io
+        sys.path.insert(0, str(p.parent.parent / "Teuton" / "Teuton"))  # best-effort
+        from teuton import tensor_io
         return tensor_io.decode_tensor(body).to(torch.long)
     except Exception:
         pass

@@ -1,11 +1,11 @@
-"""Continuous dev-box monitor for the Locus fleet.
+"""Continuous dev-box monitor for the Teuton fleet.
 
 Every `--interval` seconds, sample the bucket + Bittensor metagraph and:
   1. Write a summary JSON to v3/netuid=N/telemetry/<run_id>/monitor/<unix>.json
-  2. Append a one-line summary to `--log` (default /tmp/locus_monitor.log).
+  2. Append a one-line summary to `--log` (default /tmp/teuton_monitor.log).
 
 Run as:
-    nohup python -m scripts.monitor_loop --netuid 3 > /tmp/locus_monitor_stdout.log 2>&1 &
+    nohup python -m scripts.monitor_loop --netuid 3 > /tmp/teuton_monitor_stdout.log 2>&1 &
 """
 from __future__ import annotations
 
@@ -17,8 +17,8 @@ import sys
 import time
 from pathlib import Path
 
-from locus_core.telemetry import TelemetryWriter
-from locus_runtime.storage import S3Bucket
+from teuton_core.telemetry import TelemetryWriter
+from teuton_runtime.storage import S3Bucket
 
 
 def make_bucket() -> S3Bucket:
@@ -103,17 +103,17 @@ def chain_state(netuid: int) -> dict:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--netuid", type=int, default=int(os.environ.get("LOCUS_NETUID", "3")))
-    ap.add_argument("--run-id", default=None, help="defaults to /tmp/locus_sn3_run_id contents")
+    ap.add_argument("--netuid", type=int, default=int(os.environ.get("TEUTON_NETUID", "3")))
+    ap.add_argument("--run-id", default=None, help="defaults to /tmp/teuton_sn3_run_id contents")
     ap.add_argument("--interval", type=float, default=60.0)
-    ap.add_argument("--log", default="/tmp/locus_monitor.log")
+    ap.add_argument("--log", default="/tmp/teuton_monitor.log")
     ap.add_argument("--chain-every", type=int, default=5, help="poll chain only every N iters")
     args = ap.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     log = logging.getLogger("monitor")
 
-    run_id = args.run_id or Path("/tmp/locus_sn3_run_id").read_text().strip()
+    run_id = args.run_id or Path("/tmp/teuton_sn3_run_id").read_text().strip()
     if not run_id:
         print("RUN_ID unset", file=sys.stderr)
         return 2

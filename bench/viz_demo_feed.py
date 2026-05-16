@@ -24,8 +24,8 @@ from dataclasses import dataclass
 
 import boto3
 
-from locus_core import paths
-from locus_core.protocol import (
+from teuton_core import paths
+from teuton_core.protocol import (
     ArtifactDigest,
     ArtifactRef,
     GraphRef,

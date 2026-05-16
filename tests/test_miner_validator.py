@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from locus_core import paths
-from locus_orchestrator.run_manager import RunConfig, RunManager
-from locus_validator.neuron import ValidatorNeuron, ValidatorNeuronConfig
+from teuton_core import paths
+from teuton_orchestrator.run_manager import RunConfig, RunManager
+from teuton_validator.neuron import ValidatorNeuron, ValidatorNeuronConfig
 
 
 def test_validator_scores_honest_miners(local_bucket, run_id, start_miners) -> None:

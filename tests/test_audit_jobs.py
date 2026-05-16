@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 from bench.presigned_ssh_worker import build_worker, write_heartbeat
-from locus_core import paths
-from locus_core.protocol import EncryptedAssignmentGrantV3, JobManifestV3, JobReceiptV3
-from locus_core.wallet_crypto import DevAssignmentCrypto
-from locus_orchestrator.run_manager import RunConfig, RunManager
-from locus_validator.audit import AuditReplayConfig, AuditReplayRunner
-from locus_validator.audit_jobs import AuditJobConfig, AuditJobManager
-from locus_validator.neuron import ValidatorNeuron, ValidatorNeuronConfig
+from teuton_core import paths
+from teuton_core.protocol import EncryptedAssignmentGrantV3, JobManifestV3, JobReceiptV3
+from teuton_core.wallet_crypto import DevAssignmentCrypto
+from teuton_orchestrator.run_manager import RunConfig, RunManager
+from teuton_validator.audit import AuditReplayConfig, AuditReplayRunner
+from teuton_validator.audit_jobs import AuditJobConfig, AuditJobManager
+from teuton_validator.neuron import ValidatorNeuron, ValidatorNeuronConfig
 
 
 def _run_training(local_bucket, run_id: str, start_miners) -> None:

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from locus_orchestrator.streaming import StreamingRunConfig, StreamingRunManager
-from locus_validator.neuron import ValidatorNeuron, ValidatorNeuronConfig
+from teuton_orchestrator.streaming import StreamingRunConfig, StreamingRunManager
+from teuton_validator.neuron import ValidatorNeuron, ValidatorNeuronConfig
 
 
 def test_tiny_gpt_pipe_streaming_bridge(local_bucket, run_id, start_miners, tiny_gpt_pipe) -> None:

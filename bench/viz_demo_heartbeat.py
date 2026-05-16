@@ -1,17 +1,17 @@
 """Standalone heartbeat advertiser for the visualizer demo.
 
-Run on a Lium pod (or any GPU box). Publishes one Locus v3 heartbeat per GPU
+Run on a Lium pod (or any GPU box). Publishes one Teuton v3 heartbeat per GPU
 to the configured S3 bucket, refreshing every `INTERVAL` seconds.
 
 Required env vars:
     S3_BUCKET, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
-    LOCUS_RUN_ID                run id to advertise on (e.g. viz-demo-...)
-    LOCUS_HOTKEY_BASE           hotkey prefix (e.g. lium-noble-hawk-a3)
+    TEUTON_RUN_ID                run id to advertise on (e.g. viz-demo-...)
+    TEUTON_HOTKEY_BASE           hotkey prefix (e.g. lium-noble-hawk-a3)
 
 Optional:
-    S3_REGION (default us-east-1), S3_ENDPOINT_URL, LOCUS_NETUID (default 0),
-    LOCUS_HEARTBEAT_INTERVAL_SEC (default 5), LOCUS_HOST_LABEL (default hostname),
-    LOCUS_GPU_TYPE (overrides nvidia-smi name), LOCUS_GPU_COUNT (overrides smi count)
+    S3_REGION (default us-east-1), S3_ENDPOINT_URL, TEUTON_NETUID (default 0),
+    TEUTON_HEARTBEAT_INTERVAL_SEC (default 5), TEUTON_HOST_LABEL (default hostname),
+    TEUTON_GPU_TYPE (overrides nvidia-smi name), TEUTON_GPU_COUNT (overrides smi count)
 """
 from __future__ import annotations
 
@@ -26,8 +26,8 @@ import boto3
 
 
 def gpu_rows() -> list[tuple[int, str, int]]:
-    forced_type = os.environ.get("LOCUS_GPU_TYPE")
-    forced_count = int(os.environ.get("LOCUS_GPU_COUNT") or 0)
+    forced_type = os.environ.get("TEUTON_GPU_TYPE")
+    forced_count = int(os.environ.get("TEUTON_GPU_COUNT") or 0)
     if forced_type and forced_count:
         return [(i, forced_type, 24576) for i in range(forced_count)]
     try:
@@ -50,11 +50,11 @@ def main() -> None:
     bucket = os.environ["S3_BUCKET"]
     region = os.environ.get("S3_REGION") or "us-east-1"
     endpoint = os.environ.get("S3_ENDPOINT_URL") or None
-    netuid = int(os.environ.get("LOCUS_NETUID", "0"))
-    run_id = os.environ["LOCUS_RUN_ID"]
-    base = os.environ["LOCUS_HOTKEY_BASE"]
-    interval = int(os.environ.get("LOCUS_HEARTBEAT_INTERVAL_SEC", "5"))
-    host = os.environ.get("LOCUS_HOST_LABEL") or socket.gethostname()
+    netuid = int(os.environ.get("TEUTON_NETUID", "0"))
+    run_id = os.environ["TEUTON_RUN_ID"]
+    base = os.environ["TEUTON_HOTKEY_BASE"]
+    interval = int(os.environ.get("TEUTON_HEARTBEAT_INTERVAL_SEC", "5"))
+    host = os.environ.get("TEUTON_HOST_LABEL") or socket.gethostname()
     s3 = boto3.client(
         "s3",
         region_name=region,

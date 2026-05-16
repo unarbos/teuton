@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Provision the Locus public dashboard via Cloudflare Tunnel.
+"""Provision the Teuton public dashboard via Cloudflare Tunnel.
 
 This script is idempotent. It creates (or reuses) one Cloudflare Tunnel,
 points a public hostname like ``dashboard.teutonic.ai`` at the local
 ``discovery-ui`` container, sets the matching DNS CNAME, and prints the
-tunnel token. Drop that token into ``LOCUS_DASHBOARD_TUNNEL_TOKEN`` on the
+tunnel token. Drop that token into ``TEUTON_DASHBOARD_TUNNEL_TOKEN`` on the
 host running ``docker/compose.dashboard.yml`` and the dashboard becomes
 globally reachable over HTTPS — no inbound port required on the box.
 
@@ -36,7 +36,7 @@ Usage:
     python scripts/setup_cloudflare_dashboard.py \
         --hostname dashboard.teutonic.ai \
         --service  http://discovery-ui:8765 \
-        --tunnel-name locus-dashboard
+        --tunnel-name teuton-dashboard
 
 Convenient via Doppler (auto-fills CLOUDFLARE_API_TOKEN if available):
     doppler run --project arbos --config dev -- \
@@ -224,7 +224,7 @@ def upsert_dns(
         "content": target,
         "ttl": 1,
         "proxied": proxied,
-        "comment": "locus dashboard tunnel",
+        "comment": "teuton dashboard tunnel",
     }
     if records:
         rec_id = records[0]["id"]
@@ -235,12 +235,12 @@ def upsert_dns(
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
-    p.add_argument("--hostname", default=os.environ.get("LOCUS_DASHBOARD_HOSTNAME", "dashboard.teutonic.ai"),
+    p.add_argument("--hostname", default=os.environ.get("TEUTON_DASHBOARD_HOSTNAME", "dashboard.teutonic.ai"),
                    help="Public hostname to publish (default dashboard.teutonic.ai)")
-    p.add_argument("--service", default=os.environ.get("LOCUS_DASHBOARD_SERVICE", "http://discovery-ui:8765"),
+    p.add_argument("--service", default=os.environ.get("TEUTON_DASHBOARD_SERVICE", "http://discovery-ui:8765"),
                    help="Internal service URL the tunnel points at (default http://discovery-ui:8765)")
-    p.add_argument("--tunnel-name", default=os.environ.get("LOCUS_DASHBOARD_TUNNEL_NAME", "locus-dashboard"),
-                   help="Cloudflare Tunnel name (default locus-dashboard)")
+    p.add_argument("--tunnel-name", default=os.environ.get("TEUTON_DASHBOARD_TUNNEL_NAME", "teuton-dashboard"),
+                   help="Cloudflare Tunnel name (default teuton-dashboard)")
     p.add_argument("--account-id", default=os.environ.get("CLOUDFLARE_ACCOUNT_ID"),
                    help="Cloudflare account id (auto-detected if the token sees exactly one)")
     p.add_argument("--zone", default=os.environ.get("CLOUDFLARE_ZONE"),
@@ -311,10 +311,10 @@ def main() -> int:
     print("=" * 70)
     print(f"  Public URL : https://{args.hostname}")
     print(f"  Tunnel id  : {tunnel_id}")
-    print("  Drop the following into the host's /root/locus/.env, then run")
+    print("  Drop the following into the host's /root/teuton/.env, then run")
     print("  `docker compose -f docker/compose.dashboard.yml up -d`:")
     print()
-    print(f"  LOCUS_DASHBOARD_TUNNEL_TOKEN={tunnel_token}")
+    print(f"  TEUTON_DASHBOARD_TUNNEL_TOKEN={tunnel_token}")
     print("=" * 70)
     return 0
 

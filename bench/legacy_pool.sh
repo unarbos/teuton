@@ -61,10 +61,10 @@ _sync_one() {
     --exclude '__pycache__' --exclude '.venv' --exclude '*.egg-info' \
     --exclude '.pytest_cache' \
     -e "ssh ${SSH_OPTS[*]} -p $port" \
-    /Users/const/Locus/Locus/ "$user@$host:/root/Locus/" >/dev/null
-  SCP -P "$port" /Users/const/Locus/.env "$user@$host:/root/.env" >/dev/null
+    /Users/const/Teuton/Teuton/ "$user@$host:/root/Teuton/" >/dev/null
+  SCP -P "$port" /Users/const/Teuton/.env "$user@$host:/root/.env" >/dev/null
   SSH -p "$port" "$user@$host" \
-    "cd /root/Locus && /root/.venv/bin/pip install --quiet -e ." 2>&1 | tail -1
+    "cd /root/Teuton && /root/.venv/bin/pip install --quiet -e ." 2>&1 | tail -1
 }
 
 cmd_sync() { _for_each_box _sync_one; echo "[sync] all 5 boxes synced"; }
@@ -75,7 +75,7 @@ cmd_bootstrap() {
   local task=$1 run=$2 rounds=$3
   read -r u h p <<< "$(_master)"
   SSH -p "$p" "$u@$h" \
-    "cd /root/Locus && /root/.venv/bin/python -m bench.legacy_dist bootstrap --task $task --run-id $run --max-rounds $rounds"
+    "cd /root/Teuton && /root/.venv/bin/python -m bench.legacy_dist bootstrap --task $task --run-id $run --max-rounds $rounds"
 }
 
 # -------- start --------------------------------------------------------------
@@ -93,13 +93,13 @@ _start_box_workers() {
 # args: TAG RUN NUB DEVICE GPU_CLASS BASE_IDX N_WORKERS
 set -e
 TAG=$1; RUN=$2; NUB=$3; DEVICE=$4; GPUCLASS=$5; BASE_IDX=$6; N=$7
-mkdir -p /tmp/locus_logs
-rm -f /tmp/locus_logs/${TAG}-w*.log
+mkdir -p /tmp/teuton_logs
+rm -f /tmp/teuton_logs/${TAG}-w*.log
 for i in $(seq 0 $((N-1))); do
     GLOBAL_IDX=$((BASE_IDX + i))
     UB=$((GLOBAL_IDX % NUB))
     WID="${TAG}-w${i}"
-    LOG="/tmp/locus_logs/${WID}.log"
+    LOG="/tmp/teuton_logs/${WID}.log"
     if [ "$DEVICE" = "cuda" ]; then
         DEV_ARG="cuda:${i}"
     else
@@ -136,13 +136,13 @@ cmd_start() {
 #!/usr/bin/env bash
 set -e
 TASK=$1; RUN=$2
-cd /root/Locus
-rm -f /tmp/locus-orch.log
+cd /root/Teuton
+rm -f /tmp/teuton-orch.log
 # 90s startup_grace_sec: ssh+setsid serial spawning across 5 boxes takes
 # ~30-60s; the orchestrator must wait long enough that all workers heartbeat
 # before round 0 emits, otherwise pin assignments get stuck on the few
 # workers that beat the grace.
-setsid bash -c "/root/.venv/bin/python -u -m bench.dist orchestrator --task $TASK --run-id $RUN --poll-interval 0.2 --startup-grace-sec 90 >/tmp/locus-orch.log 2>&1 </dev/null" >/dev/null 2>&1 </dev/null &
+setsid bash -c "/root/.venv/bin/python -u -m bench.dist orchestrator --task $TASK --run-id $RUN --poll-interval 0.2 --startup-grace-sec 90 >/tmp/teuton-orch.log 2>&1 </dev/null" >/dev/null 2>&1 </dev/null &
 disown $! 2>/dev/null || true
 sleep 1
 pgrep -fa "bench.dist orchestrator" | head -1
@@ -171,13 +171,13 @@ _start_pipe_box_workers() {
 #!/usr/bin/env bash
 set -e
 TAG=$1; RUN=$2; NSTAGES=$3; DEVICE=$4; GPUCLASS=$5; BASE_IDX=$6; N=$7
-mkdir -p /tmp/locus_logs
-rm -f /tmp/locus_logs/${TAG}-w*.log
+mkdir -p /tmp/teuton_logs
+rm -f /tmp/teuton_logs/${TAG}-w*.log
 for i in $(seq 0 $((N-1))); do
     GLOBAL_IDX=$((BASE_IDX + i))
     STAGE=$((GLOBAL_IDX % NSTAGES))
     WID="${TAG}-w${i}"
-    LOG="/tmp/locus_logs/${WID}.log"
+    LOG="/tmp/teuton_logs/${WID}.log"
     if [ "$DEVICE" = "cuda" ]; then
         DEV_ARG="cuda:${i}"
     else
@@ -212,9 +212,9 @@ cmd_start_pipe() {
 #!/usr/bin/env bash
 set -e
 TASK=$1; RUN=$2
-cd /root/Locus
-rm -f /tmp/locus-orch.log
-setsid bash -c "/root/.venv/bin/python -u -m bench.dist streaming-orchestrator --task $TASK --run-id $RUN --poll-interval 0.2 --startup-grace-sec 90 >/tmp/locus-orch.log 2>&1 </dev/null" >/dev/null 2>&1 </dev/null &
+cd /root/Teuton
+rm -f /tmp/teuton-orch.log
+setsid bash -c "/root/.venv/bin/python -u -m bench.dist streaming-orchestrator --task $TASK --run-id $RUN --poll-interval 0.2 --startup-grace-sec 90 >/tmp/teuton-orch.log 2>&1 </dev/null" >/dev/null 2>&1 </dev/null &
 disown $! 2>/dev/null || true
 sleep 1
 pgrep -fa "bench.dist streaming-orchestrator" | head -1
@@ -237,7 +237,7 @@ cmd_tail() {
   local run=$1 rounds=$2
   read -r u h p <<< "$(_master)"
   SSH -p "$p" "$u@$h" \
-    "cd /root/Locus && /root/.venv/bin/python -m bench.legacy_dist tail \
+    "cd /root/Teuton && /root/.venv/bin/python -m bench.legacy_dist tail \
        --run-id $run --max-rounds $rounds --poll-interval 2.0 --timeout-sec 1800.0"
 }
 
@@ -260,7 +260,7 @@ cmd_wipe() {
   local run=$1
   read -r u h p <<< "$(_master)"
   SSH -p "$p" "$u@$h" \
-    "cd /root/Locus && /root/.venv/bin/python -m bench.legacy_dist wipe --run-id $run"
+    "cd /root/Teuton && /root/.venv/bin/python -m bench.legacy_dist wipe --run-id $run"
 }
 
 # -------- status -------------------------------------------------------------
@@ -271,7 +271,7 @@ _status_box() {
   out=$(SSH -p "$port" "$user@$host" \
     "ps aux | awk '/bench\\.dist worker/ && !/awk/' | wc -l; \
      ps aux | awk '/bench\\.dist orchestrator/ && !/awk/' | wc -l; \
-     ls /tmp/locus_logs/${tag}-w*.log 2>/dev/null | wc -l" 2>&1)
+     ls /tmp/teuton_logs/${tag}-w*.log 2>/dev/null | wc -l" 2>&1)
   awk -v tag="$tag" -v expect="$nwork" -v gpu="$gpuclass" \
     'BEGIN{nw=0;no=0;nl=0} NR==1{nw=$1} NR==2{no=$1} NR==3{nl=$1} \
      END{printf "%-3s %-10s expect=%d alive_workers=%d alive_orch=%d log_files=%d\n", \

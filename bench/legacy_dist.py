@@ -1,4 +1,4 @@
-"""Distributed-pool driver — same orchestrator/worker classes as locus.main,
+"""Distributed-pool driver — same orchestrator/worker classes as teuton.main,
 but the bucket is `S3Bucket` constructed from /root/.env.
 
 Usage on master node:
@@ -24,7 +24,7 @@ from pathlib import Path
 
 def _load_env() -> None:
     from dotenv import load_dotenv
-    for p in [Path("/root/.env"), Path("/root/Locus/.env"), Path("/root/Locus/.env"),
+    for p in [Path("/root/.env"), Path("/root/Teuton/.env"), Path("/root/Teuton/.env"),
               Path(__file__).resolve().parent.parent.parent / ".env"]:
         if p.exists():
             load_dotenv(p, override=True)
@@ -33,7 +33,7 @@ def _load_env() -> None:
 
 
 def _build_bucket():
-    from locus_legacy_v2.storage import S3Bucket
+    from teuton_legacy_v2.storage import S3Bucket
     return S3Bucket(
         bucket=os.environ["S3_BUCKET"],
         region=os.environ.get("S3_REGION", "us-east-1"),
@@ -43,10 +43,10 @@ def _build_bucket():
 
 
 def _load_task(name: str):
-    from locus_legacy_v2.main import _KNOWN_TASKS
+    from teuton_legacy_v2.main import _KNOWN_TASKS
     if name not in _KNOWN_TASKS:
         raise SystemExit(f"unknown task: {name!r}; known: {sorted(_KNOWN_TASKS)}")
-    return importlib.import_module(f"locus.tasks.{name}")
+    return importlib.import_module(f"teuton.tasks.{name}")
 
 
 def cmd_bootstrap(args: argparse.Namespace) -> int:
@@ -58,7 +58,7 @@ def cmd_bootstrap(args: argparse.Namespace) -> int:
 
 
 def cmd_orchestrator(args: argparse.Namespace) -> int:
-    from locus_legacy_v2.orchestrator import Orchestrator
+    from teuton_legacy_v2.orchestrator import Orchestrator
     bucket = _build_bucket()
     task = _load_task(args.task)
     graphs, params = task.build_orchestrator_inputs(bucket=bucket, run_id=args.run_id)
@@ -80,7 +80,7 @@ def cmd_streaming_orchestrator(args: argparse.Namespace) -> int:
         level=logging.INFO,
         format="%(asctime)s %(name)s [%(levelname)s] %(message)s",
     )
-    from locus_legacy_v2.streaming import StreamingOrchestrator
+    from teuton_legacy_v2.streaming import StreamingOrchestrator
     bucket = _build_bucket()
     task = _load_task(args.task)
     if not hasattr(task, "build_streaming_inputs"):
@@ -100,7 +100,7 @@ def cmd_streaming_orchestrator(args: argparse.Namespace) -> int:
 
 
 def cmd_worker(args: argparse.Namespace) -> int:
-    from locus_legacy_v2.worker import Worker
+    from teuton_legacy_v2.worker import Worker
     bucket = _build_bucket()
     caps: dict = {}
     if args.resident_ub:
@@ -133,7 +133,7 @@ def cmd_worker(args: argparse.Namespace) -> int:
 
 
 def cmd_validator(args: argparse.Namespace) -> int:
-    from locus_legacy_v2.validator import ReplayValidator
+    from teuton_legacy_v2.validator import ReplayValidator
     bucket = _build_bucket()
     v = ReplayValidator(
         bucket=bucket,
@@ -155,7 +155,7 @@ def cmd_validator(args: argparse.Namespace) -> int:
 
 
 def cmd_ledger(args: argparse.Namespace) -> int:
-    from locus_legacy_v2.validator import summarize_ledger
+    from teuton_legacy_v2.validator import summarize_ledger
     bucket = _build_bucket()
     summary = summarize_ledger(bucket, run_id=args.run_id)
     print(json.dumps(summary.to_dict(), indent=2, sort_keys=True), flush=True)
@@ -164,7 +164,7 @@ def cmd_ledger(args: argparse.Namespace) -> int:
 
 def cmd_tail(args: argparse.Namespace) -> int:
     """Poll state.json and metrics, print as they become available."""
-    from locus import paths
+    from teuton import paths
     bucket = _build_bucket()
     state_uri = bucket.uri_for_key(paths.state_key(args.run_id))
     seen_metrics = set()

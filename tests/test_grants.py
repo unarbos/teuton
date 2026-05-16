@@ -7,18 +7,18 @@ import time
 import pytest
 import torch
 
-from locus_core import paths
-from locus_core.ir import GraphBuilder
-from locus_core.protocol import ArtifactRef, AssignmentGrantV3, GraphRef, JobManifestV3, MetagraphMinerIdentity, PresignedUrlGrant, VerificationPolicy, WorkerIdentity
-from locus_core.wallet_crypto import BittensorWalletCrypto, DevAssignmentCrypto
-from locus_miner.worker import MinerWorker, WorkerConfig
-from locus_orchestrator.run_manager import RunConfig, RunManager
-from locus_runtime import tensor_io
-from locus_runtime.executor import JobExecutor
-from locus_runtime.grants import LocalGrantBroker, S3PresignedUrlBroker
-from locus_runtime.storage import S3Bucket
-from locus_runtime.transport import PresignedArtifactTransport
-from locus_validator.neuron import ValidatorNeuron, ValidatorNeuronConfig
+from teuton_core import paths
+from teuton_core.ir import GraphBuilder
+from teuton_core.protocol import ArtifactRef, AssignmentGrantV3, GraphRef, JobManifestV3, MetagraphMinerIdentity, PresignedUrlGrant, VerificationPolicy, WorkerIdentity
+from teuton_core.wallet_crypto import BittensorWalletCrypto, DevAssignmentCrypto
+from teuton_miner.worker import MinerWorker, WorkerConfig
+from teuton_orchestrator.run_manager import RunConfig, RunManager
+from teuton_runtime import tensor_io
+from teuton_runtime.executor import JobExecutor
+from teuton_runtime.grants import LocalGrantBroker, S3PresignedUrlBroker
+from teuton_runtime.storage import S3Bucket
+from teuton_runtime.transport import PresignedArtifactTransport
+from teuton_validator.neuron import ValidatorNeuron, ValidatorNeuronConfig
 
 
 def test_metagraph_identity_round_trip() -> None:
@@ -180,8 +180,8 @@ def test_local_grant_mode_round_flow(local_bucket, run_id) -> None:
 
 @pytest.mark.s3
 def test_s3_presigned_broker_smoke() -> None:
-    if os.environ.get("LOCUS_TEST_S3") != "1":
-        pytest.skip("set LOCUS_TEST_S3=1 to run S3 presigned broker test")
+    if os.environ.get("TEUTON_TEST_S3") != "1":
+        pytest.skip("set TEUTON_TEST_S3=1 to run S3 presigned broker test")
     required = ["S3_BUCKET", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"]
     if any(not os.environ.get(k) for k in required):
         pytest.skip("missing S3 env")

@@ -1,7 +1,7 @@
 [project]
-name = "locus-v3"
+name = "teuton-v3"
 version = "0.3.0"
-description = "Locus v3: subnet-ready bucket-native distributed training"
+description = "Teuton v3: subnet-ready bucket-native distributed training"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -30,31 +30,31 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 packages = [
-    "locus_core",
-    "locus_runtime",
-    "locus_runtime.data",
-    "locus_orchestrator",
-    "locus_miner",
-    "locus_validator",
-    "locus_tasks",
-    "locus_legacy_v2",
-    "locus_legacy_v2.tasks",
-    "locus_legacy_v2.data",
+    "teuton_core",
+    "teuton_runtime",
+    "teuton_runtime.data",
+    "teuton_orchestrator",
+    "teuton_miner",
+    "teuton_validator",
+    "teuton_tasks",
+    "teuton_legacy_v2",
+    "teuton_legacy_v2.tasks",
+    "teuton_legacy_v2.data",
     "bench",
     "scripts",
 ]
 
 [project.scripts]
-locus-v3 = "locus_core.cli:main"
-locus-v2-legacy = "locus_legacy_v2.main:main"
-locus-generate-ed25519-hotkey = "scripts.generate_ed25519_hotkey:main"
+teuton-v3 = "teuton_core.cli:main"
+teuton-v2-legacy = "teuton_legacy_v2.main:main"
+teuton-generate-ed25519-hotkey = "scripts.generate_ed25519_hotkey:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [
-    "s3: requires LOCUS_TEST_S3=1 and bucket credentials",
-    "lium: requires LOCUS_TEST_LIUM=1 and LIUM_API_KEY",
-    "subnet: requires LOCUS_TEST_SUBNET=1 and Bittensor wallet config",
+    "s3: requires TEUTON_TEST_S3=1 and bucket credentials",
+    "lium: requires TEUTON_TEST_LIUM=1 and LIUM_API_KEY",
+    "subnet: requires TEUTON_TEST_SUBNET=1 and Bittensor wallet config",
     "dataset: requires optional dataset/tokenizer dependencies",
-    "drand: requires LOCUS_TEST_DRAND=1, network access, and bittensor-drand",
+    "drand: requires TEUTON_TEST_DRAND=1, network access, and bittensor-drand",
 ]

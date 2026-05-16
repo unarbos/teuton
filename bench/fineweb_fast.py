@@ -1,6 +1,6 @@
 """Fast parallel FineWeb-edu tokenizer for scaling-experiment data.
 
-Single-threaded tokenization (the original locus.data.fineweb_loader)
+Single-threaded tokenization (the original teuton.data.fineweb_loader)
 maxes out around ~100k tokens/sec, so it takes ~28h for 10B tokens.
 This script uses a multiprocessing pool: ~24 workers each pull HF
 streaming rows, tokenize with tiktoken, and write to per-worker shard
@@ -11,7 +11,7 @@ Format: raw int32 little-endian, NO header (we use mmap path in DDP).
 
 Usage:
     python bench/fineweb_fast.py --target-tokens 10_000_000_000 \\
-        --workers 24 --out-dir /workspace/locus_data_10B
+        --workers 24 --out-dir /workspace/teuton_data_10B
 """
 from __future__ import annotations
 
@@ -74,7 +74,7 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--target-tokens", type=int, default=10_000_000_000)
     p.add_argument("--workers", type=int, default=24)
-    p.add_argument("--out-dir", default="/workspace/locus_data_10B")
+    p.add_argument("--out-dir", default="/workspace/teuton_data_10B")
     p.add_argument("--skip-stride", type=int, default=50_000,
                    help="rows to skip between workers (avoid duplicating data)")
     args = p.parse_args()

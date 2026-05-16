@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Spawn N detached workers on the local box, each writing to /tmp/locus-w<i>.log.
+# Spawn N detached workers on the local box, each writing to /tmp/teuton-w<i>.log.
 # Args: <N_WORKERS> <RUN_ID> <BOX_TAG>
 set -euo pipefail
 
@@ -7,12 +7,12 @@ N=$1
 RUN_ID=$2
 BOX_TAG=$3
 
-mkdir -p /tmp/locus_logs
-rm -f /tmp/locus_logs/${BOX_TAG}-w*.log
+mkdir -p /tmp/teuton_logs
+rm -f /tmp/teuton_logs/${BOX_TAG}-w*.log
 
 for i in $(seq 0 $((N-1))); do
     WID="${BOX_TAG}-w${i}"
-    LOG="/tmp/locus_logs/${WID}.log"
+    LOG="/tmp/teuton_logs/${WID}.log"
     setsid nohup /root/.venv/bin/python -u -m bench.dist worker \
         --run-id "$RUN_ID" \
         --worker-id "$WID" \

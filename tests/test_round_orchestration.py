@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import pytest
 
-from locus_core import paths
-from locus_miner.worker import MinerWorker, WorkerConfig
-from locus_orchestrator.run_manager import RunConfig, RunManager
+from teuton_core import paths
+from teuton_miner.worker import MinerWorker, WorkerConfig
+from teuton_orchestrator.run_manager import RunConfig, RunManager
 
 
 def test_round_flow_writes_step_index_and_outputs(local_bucket, run_id, start_miners) -> None:

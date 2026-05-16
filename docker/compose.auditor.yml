@@ -1,4 +1,4 @@
-# Auditor host stack (one 8xB200 box): 8 locus:auditor containers, each pinned
+# Auditor host stack (one 8xB200 box): 8 teuton:auditor containers, each pinned
 # to one GPU index, polling the audit job index and writing AuditResultV3
 # objects back to the bucket. Plus one Watchtower.
 #
@@ -6,20 +6,20 @@
 # (via entrypoint role=auditor-worker) which is itself a long-running loop until
 # its --timeout-sec elapses or the container is killed.
 #
-# Required env on the remote (via /root/locus/.env):
+# Required env on the remote (via /root/teuton/.env):
 #   DOCKER_USER, S3_BUCKET, S3_REGION, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY,
-#   LOCUS_NETUID (default 3),
+#   TEUTON_NETUID (default 3),
 #   AUDITOR_HK_0..AUDITOR_HK_7  (SS58 strings for the 8 auditor hotkeys),
 #   AUDITOR_HK_NAME_0..AUDITOR_HK_NAME_7  (on-disk hotkey filenames),
-#   LOCUS_OWNER_SECRET, LOCUS_MINER_SECRET, LOCUS_ASSIGNMENT_SECRET
+#   TEUTON_OWNER_SECRET, TEUTON_MINER_SECRET, TEUTON_ASSIGNMENT_SECRET
 #
-# RUN_ID is optional: when unset, the image's baked LOCUS_BAKED_RUN_ID
-# (set at `docker build --build-arg LOCUS_RUN_ID=...`) is used. Set RUN_ID
-# in /root/locus/.env only when you need a per-host override.
-name: locus-auditor
+# RUN_ID is optional: when unset, the image's baked TEUTON_BAKED_RUN_ID
+# (set at `docker build --build-arg TEUTON_RUN_ID=...`) is used. Set RUN_ID
+# in /root/teuton/.env only when you need a per-host override.
+name: teuton-auditor
 
 x-auditor-common: &auditor-common
-  image: ${DOCKER_USER}/locus:auditor
+  image: ${DOCKER_USER}/teuton:auditor
   restart: always
   pull_policy: always
   runtime: nvidia
@@ -29,41 +29,41 @@ x-auditor-common: &auditor-common
     - com.centurylinklabs.watchtower.enable=true
 
 x-auditor-env: &auditor-env
-  LOCUS_ROLE: auditor-worker
+  TEUTON_ROLE: auditor-worker
   S3_BUCKET: ${S3_BUCKET}
   S3_REGION: ${S3_REGION:-us-east-1}
   S3_ENDPOINT_URL: ${S3_ENDPOINT_URL:-}
   AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
   AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
   NVIDIA_DRIVER_CAPABILITIES: compute,utility
-  LOCUS_OWNER_SECRET: ${LOCUS_OWNER_SECRET}
-  LOCUS_MINER_SECRET: ${LOCUS_MINER_SECRET}
-  LOCUS_ASSIGNMENT_SECRET: ${LOCUS_ASSIGNMENT_SECRET}
+  TEUTON_OWNER_SECRET: ${TEUTON_OWNER_SECRET}
+  TEUTON_MINER_SECRET: ${TEUTON_MINER_SECRET}
+  TEUTON_ASSIGNMENT_SECRET: ${TEUTON_ASSIGNMENT_SECRET}
   # Match audit-jobs side: auditors aren't on chain, so dev (HMAC) crypto.
-  LOCUS_ASSIGNMENT_CRYPTO: dev
+  TEUTON_ASSIGNMENT_CRYPTO: dev
   # Optional runtime run-id override. Empty/unset falls back to the
-  # image-baked LOCUS_BAKED_RUN_ID (resolved in entrypoint.sh).
-  LOCUS_RUN_ID: ${LOCUS_RUN_ID:-${RUN_ID:-}}
+  # image-baked TEUTON_BAKED_RUN_ID (resolved in entrypoint.sh).
+  TEUTON_RUN_ID: ${TEUTON_RUN_ID:-${RUN_ID:-}}
   BT_WALLET_PATH: /root/.bittensor/wallets
-  BT_WALLET_NAME: ${AUDITOR_WALLET_NAME:-locus_mining}
+  BT_WALLET_NAME: ${AUDITOR_WALLET_NAME:-teuton_mining}
 
 services:
   auditor-gpu0:
     <<: *auditor-common
-    container_name: locus-auditor-gpu0
+    container_name: teuton-auditor-gpu0
     environment:
       <<: *auditor-env
       NVIDIA_VISIBLE_DEVICES: "0"
       BT_HOTKEY_NAME: ${AUDITOR_HK_NAME_0}
     command:
-      - --netuid=${LOCUS_NETUID:-3}
+      - --netuid=${TEUTON_NETUID:-3}
       - --hotkey=${AUDITOR_HK_0}
       - --worker-id=auditor-gpu0
       - --device=cuda:0
       - --gpu-index=0
-      - --assignment-secret=${LOCUS_ASSIGNMENT_SECRET}
-      - --miner-secret=${LOCUS_MINER_SECRET}
-      - --owner-secret=${LOCUS_OWNER_SECRET}
+      - --assignment-secret=${TEUTON_ASSIGNMENT_SECRET}
+      - --miner-secret=${TEUTON_MINER_SECRET}
+      - --owner-secret=${TEUTON_OWNER_SECRET}
       - --s3-bucket=${S3_BUCKET}
       - --poll-interval=1
       - --timeout-sec=86400
@@ -71,20 +71,20 @@ services:
 
   auditor-gpu1:
     <<: *auditor-common
-    container_name: locus-auditor-gpu1
+    container_name: teuton-auditor-gpu1
     environment:
       <<: *auditor-env
       NVIDIA_VISIBLE_DEVICES: "1"
       BT_HOTKEY_NAME: ${AUDITOR_HK_NAME_1}
     command:
-      - --netuid=${LOCUS_NETUID:-3}
+      - --netuid=${TEUTON_NETUID:-3}
       - --hotkey=${AUDITOR_HK_1}
       - --worker-id=auditor-gpu1
       - --device=cuda:0
       - --gpu-index=0
-      - --assignment-secret=${LOCUS_ASSIGNMENT_SECRET}
-      - --miner-secret=${LOCUS_MINER_SECRET}
-      - --owner-secret=${LOCUS_OWNER_SECRET}
+      - --assignment-secret=${TEUTON_ASSIGNMENT_SECRET}
+      - --miner-secret=${TEUTON_MINER_SECRET}
+      - --owner-secret=${TEUTON_OWNER_SECRET}
       - --s3-bucket=${S3_BUCKET}
       - --poll-interval=1
       - --timeout-sec=86400
@@ -92,20 +92,20 @@ services:
 
   auditor-gpu2:
     <<: *auditor-common
-    container_name: locus-auditor-gpu2
+    container_name: teuton-auditor-gpu2
     environment:
       <<: *auditor-env
       NVIDIA_VISIBLE_DEVICES: "2"
       BT_HOTKEY_NAME: ${AUDITOR_HK_NAME_2}
     command:
-      - --netuid=${LOCUS_NETUID:-3}
+      - --netuid=${TEUTON_NETUID:-3}
       - --hotkey=${AUDITOR_HK_2}
       - --worker-id=auditor-gpu2
       - --device=cuda:0
       - --gpu-index=0
-      - --assignment-secret=${LOCUS_ASSIGNMENT_SECRET}
-      - --miner-secret=${LOCUS_MINER_SECRET}
-      - --owner-secret=${LOCUS_OWNER_SECRET}
+      - --assignment-secret=${TEUTON_ASSIGNMENT_SECRET}
+      - --miner-secret=${TEUTON_MINER_SECRET}
+      - --owner-secret=${TEUTON_OWNER_SECRET}
       - --s3-bucket=${S3_BUCKET}
       - --poll-interval=1
       - --timeout-sec=86400
@@ -113,20 +113,20 @@ services:
 
   auditor-gpu3:
     <<: *auditor-common
-    container_name: locus-auditor-gpu3
+    container_name: teuton-auditor-gpu3
     environment:
       <<: *auditor-env
       NVIDIA_VISIBLE_DEVICES: "3"
       BT_HOTKEY_NAME: ${AUDITOR_HK_NAME_3}
     command:
-      - --netuid=${LOCUS_NETUID:-3}
+      - --netuid=${TEUTON_NETUID:-3}
       - --hotkey=${AUDITOR_HK_3}
       - --worker-id=auditor-gpu3
       - --device=cuda:0
       - --gpu-index=0
-      - --assignment-secret=${LOCUS_ASSIGNMENT_SECRET}
-      - --miner-secret=${LOCUS_MINER_SECRET}
-      - --owner-secret=${LOCUS_OWNER_SECRET}
+      - --assignment-secret=${TEUTON_ASSIGNMENT_SECRET}
+      - --miner-secret=${TEUTON_MINER_SECRET}
+      - --owner-secret=${TEUTON_OWNER_SECRET}
       - --s3-bucket=${S3_BUCKET}
       - --poll-interval=1
       - --timeout-sec=86400
@@ -134,20 +134,20 @@ services:
 
   auditor-gpu4:
     <<: *auditor-common
-    container_name: locus-auditor-gpu4
+    container_name: teuton-auditor-gpu4
     environment:
       <<: *auditor-env
       NVIDIA_VISIBLE_DEVICES: "4"
       BT_HOTKEY_NAME: ${AUDITOR_HK_NAME_4}
     command:
-      - --netuid=${LOCUS_NETUID:-3}
+      - --netuid=${TEUTON_NETUID:-3}
       - --hotkey=${AUDITOR_HK_4}
       - --worker-id=auditor-gpu4
       - --device=cuda:0
       - --gpu-index=0
-      - --assignment-secret=${LOCUS_ASSIGNMENT_SECRET}
-      - --miner-secret=${LOCUS_MINER_SECRET}
-      - --owner-secret=${LOCUS_OWNER_SECRET}
+      - --assignment-secret=${TEUTON_ASSIGNMENT_SECRET}
+      - --miner-secret=${TEUTON_MINER_SECRET}
+      - --owner-secret=${TEUTON_OWNER_SECRET}
       - --s3-bucket=${S3_BUCKET}
       - --poll-interval=1
       - --timeout-sec=86400
@@ -155,20 +155,20 @@ services:
 
   auditor-gpu5:
     <<: *auditor-common
-    container_name: locus-auditor-gpu5
+    container_name: teuton-auditor-gpu5
     environment:
       <<: *auditor-env
       NVIDIA_VISIBLE_DEVICES: "5"
       BT_HOTKEY_NAME: ${AUDITOR_HK_NAME_5}
     command:
-      - --netuid=${LOCUS_NETUID:-3}
+      - --netuid=${TEUTON_NETUID:-3}
       - --hotkey=${AUDITOR_HK_5}
       - --worker-id=auditor-gpu5
       - --device=cuda:0
       - --gpu-index=0
-      - --assignment-secret=${LOCUS_ASSIGNMENT_SECRET}
-      - --miner-secret=${LOCUS_MINER_SECRET}
-      - --owner-secret=${LOCUS_OWNER_SECRET}
+      - --assignment-secret=${TEUTON_ASSIGNMENT_SECRET}
+      - --miner-secret=${TEUTON_MINER_SECRET}
+      - --owner-secret=${TEUTON_OWNER_SECRET}
       - --s3-bucket=${S3_BUCKET}
       - --poll-interval=1
       - --timeout-sec=86400
@@ -176,20 +176,20 @@ services:
 
   auditor-gpu6:
     <<: *auditor-common
-    container_name: locus-auditor-gpu6
+    container_name: teuton-auditor-gpu6
     environment:
       <<: *auditor-env
       NVIDIA_VISIBLE_DEVICES: "6"
       BT_HOTKEY_NAME: ${AUDITOR_HK_NAME_6}
     command:
-      - --netuid=${LOCUS_NETUID:-3}
+      - --netuid=${TEUTON_NETUID:-3}
       - --hotkey=${AUDITOR_HK_6}
       - --worker-id=auditor-gpu6
       - --device=cuda:0
       - --gpu-index=0
-      - --assignment-secret=${LOCUS_ASSIGNMENT_SECRET}
-      - --miner-secret=${LOCUS_MINER_SECRET}
-      - --owner-secret=${LOCUS_OWNER_SECRET}
+      - --assignment-secret=${TEUTON_ASSIGNMENT_SECRET}
+      - --miner-secret=${TEUTON_MINER_SECRET}
+      - --owner-secret=${TEUTON_OWNER_SECRET}
       - --s3-bucket=${S3_BUCKET}
       - --poll-interval=1
       - --timeout-sec=86400
@@ -197,20 +197,20 @@ services:
 
   auditor-gpu7:
     <<: *auditor-common
-    container_name: locus-auditor-gpu7
+    container_name: teuton-auditor-gpu7
     environment:
       <<: *auditor-env
       NVIDIA_VISIBLE_DEVICES: "7"
       BT_HOTKEY_NAME: ${AUDITOR_HK_NAME_7}
     command:
-      - --netuid=${LOCUS_NETUID:-3}
+      - --netuid=${TEUTON_NETUID:-3}
       - --hotkey=${AUDITOR_HK_7}
       - --worker-id=auditor-gpu7
       - --device=cuda:0
       - --gpu-index=0
-      - --assignment-secret=${LOCUS_ASSIGNMENT_SECRET}
-      - --miner-secret=${LOCUS_MINER_SECRET}
-      - --owner-secret=${LOCUS_OWNER_SECRET}
+      - --assignment-secret=${TEUTON_ASSIGNMENT_SECRET}
+      - --miner-secret=${TEUTON_MINER_SECRET}
+      - --owner-secret=${TEUTON_OWNER_SECRET}
       - --s3-bucket=${S3_BUCKET}
       - --poll-interval=1
       - --timeout-sec=86400
@@ -218,7 +218,7 @@ services:
 
   watchtower:
     image: containrrr/watchtower:latest
-    container_name: locus-watchtower
+    container_name: teuton-auditor-watchtower
     restart: always
     environment:
       WATCHTOWER_LABEL_ENABLE: "true"

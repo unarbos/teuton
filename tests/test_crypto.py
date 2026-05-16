@@ -7,13 +7,13 @@ import time
 import pytest
 import torch
 
-from locus_core.ir import GraphBuilder
-from locus_core.protocol import ArtifactCryptoPolicy, ArtifactRef, CryptoMode, GraphRef, JobManifestV3, VerificationPolicy, WorkerIdentity
-from locus_core.signatures import HmacSigner
-from locus_runtime import tensor_io
-from locus_runtime.crypto import BittensorDrandTimelockProvider, MockDrandTimelockProvider, TimelockPending, decode_envelope, encode_envelope
-from locus_runtime.executor import JobExecutor
-from locus_validator.neuron import ValidatorNeuron, ValidatorNeuronConfig
+from teuton_core.ir import GraphBuilder
+from teuton_core.protocol import ArtifactCryptoPolicy, ArtifactRef, CryptoMode, GraphRef, JobManifestV3, VerificationPolicy, WorkerIdentity
+from teuton_core.signatures import HmacSigner
+from teuton_runtime import tensor_io
+from teuton_runtime.crypto import BittensorDrandTimelockProvider, MockDrandTimelockProvider, TimelockPending, decode_envelope, encode_envelope
+from teuton_runtime.executor import JobExecutor
+from teuton_validator.neuron import ValidatorNeuron, ValidatorNeuronConfig
 
 
 def _graph():
@@ -124,8 +124,8 @@ def test_mock_timelock_blocks_until_reveal() -> None:
 
 @pytest.mark.drand
 def test_real_drand_tlock_round_trip() -> None:
-    if os.environ.get("LOCUS_TEST_DRAND") != "1":
-        pytest.skip("set LOCUS_TEST_DRAND=1 to run real drand tlock test")
+    if os.environ.get("TEUTON_TEST_DRAND") != "1":
+        pytest.skip("set TEUTON_TEST_DRAND=1 to run real drand tlock test")
 
     provider = BittensorDrandTimelockProvider()
     target_round = provider.latest_round() + 1

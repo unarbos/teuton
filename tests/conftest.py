@@ -6,8 +6,8 @@ from collections.abc import Iterator
 
 import pytest
 
-from locus_miner.neuron import MinerNeuron, MinerNeuronConfig
-from locus_runtime.storage import LocalBucket
+from teuton_miner.neuron import MinerNeuron, MinerNeuronConfig
+from teuton_runtime.storage import LocalBucket
 
 
 _RUN_COUNTER = itertools.count()
@@ -66,7 +66,7 @@ def start_miners(local_bucket):
 
 @pytest.fixture
 def tiny_gpt_pipe(monkeypatch) -> Iterator[object]:
-    import locus_tasks.gpt_pipe as gp
+    import teuton_tasks.gpt_pipe as gp
 
     values = {
         "VOCAB": 128,

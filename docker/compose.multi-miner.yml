@@ -1,22 +1,22 @@
 # Multi-miner stack for hosts with many GPUs that we want to repurpose as
-# several independent Locus miners (1 container = 1 GPU = 1 hotkey).
+# several independent Teuton miners (1 container = 1 GPU = 1 hotkey).
 #
 # Used on the spare 8x B200 (gentle-eagle-5c) to host miners 8/9/10. Add
 # more `minerN` services if you want to fill the rest of the GPUs.
 #
-# Required env on the remote (via /root/locus/.env):
+# Required env on the remote (via /root/teuton/.env):
 #   DOCKER_USER, S3_BUCKET, S3_REGION, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY,
-#   LOCUS_NETUID (default 3),
-#   LOCUS_OWNER_SECRET, LOCUS_MINER_SECRET, LOCUS_ASSIGNMENT_SECRET,
+#   TEUTON_NETUID (default 3),
+#   TEUTON_OWNER_SECRET, TEUTON_MINER_SECRET, TEUTON_ASSIGNMENT_SECRET,
 #   MINER_HK_SS58_0..2, MINER_HK_NAME_0..2  (per-GPU hotkey + on-disk name)
 #
-# RUN_ID is optional: when unset, the image's baked LOCUS_BAKED_RUN_ID
-# (set at `docker build --build-arg LOCUS_RUN_ID=...`) is used. Set RUN_ID
-# in /root/locus/.env only when you need a per-host override.
-name: locus-miners
+# RUN_ID is optional: when unset, the image's baked TEUTON_BAKED_RUN_ID
+# (set at `docker build --build-arg TEUTON_RUN_ID=...`) is used. Set RUN_ID
+# in /root/teuton/.env only when you need a per-host override.
+name: teuton-miners
 
 x-miner-common: &miner-common
-  image: ${DOCKER_USER}/locus:miner
+  image: ${DOCKER_USER}/teuton:miner
   restart: always
   pull_policy: always
   runtime: nvidia
@@ -26,37 +26,37 @@ x-miner-common: &miner-common
     - com.centurylinklabs.watchtower.enable=true
 
 x-miner-env: &miner-env
-  LOCUS_ROLE: miner
+  TEUTON_ROLE: miner
   S3_BUCKET: ${S3_BUCKET}
   S3_REGION: ${S3_REGION:-us-east-1}
   S3_ENDPOINT_URL: ${S3_ENDPOINT_URL:-}
   AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
   AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
   NVIDIA_DRIVER_CAPABILITIES: compute,utility
-  LOCUS_OWNER_SECRET: ${LOCUS_OWNER_SECRET}
-  LOCUS_MINER_SECRET: ${LOCUS_MINER_SECRET}
-  LOCUS_ASSIGNMENT_SECRET: ${LOCUS_ASSIGNMENT_SECRET}
-  LOCUS_ASSIGNMENT_CRYPTO: ${LOCUS_ASSIGNMENT_CRYPTO:-ed25519}
+  TEUTON_OWNER_SECRET: ${TEUTON_OWNER_SECRET}
+  TEUTON_MINER_SECRET: ${TEUTON_MINER_SECRET}
+  TEUTON_ASSIGNMENT_SECRET: ${TEUTON_ASSIGNMENT_SECRET}
+  TEUTON_ASSIGNMENT_CRYPTO: ${TEUTON_ASSIGNMENT_CRYPTO:-ed25519}
   # Optional runtime run-id override. Empty/unset falls back to the
-  # image-baked LOCUS_BAKED_RUN_ID (resolved in entrypoint.sh).
-  LOCUS_RUN_ID: ${LOCUS_RUN_ID:-${RUN_ID:-}}
+  # image-baked TEUTON_BAKED_RUN_ID (resolved in entrypoint.sh).
+  TEUTON_RUN_ID: ${TEUTON_RUN_ID:-${RUN_ID:-}}
   BT_WALLET_PATH: /root/.bittensor/wallets
-  BT_WALLET_NAME: ${MINER_WALLET_NAME:-locus_mining}
+  BT_WALLET_NAME: ${MINER_WALLET_NAME:-teuton_mining}
 
 services:
   miner-gpu0:
     <<: *miner-common
-    container_name: locus-miner-gpu0
+    container_name: teuton-miner-gpu0
     environment:
       <<: *miner-env
       NVIDIA_VISIBLE_DEVICES: "0"
       BT_HOTKEY_NAME: ${MINER_HK_NAME_0}
     command:
-      - --netuid=${LOCUS_NETUID:-3}
+      - --netuid=${TEUTON_NETUID:-3}
       - --hotkey=${MINER_HK_SS58_0}
       - --devices=cuda:0
       - --wallet-path=/root/.bittensor/wallets
-      - --wallet-name=${MINER_WALLET_NAME:-locus_mining}
+      - --wallet-name=${MINER_WALLET_NAME:-teuton_mining}
       - --hotkey-name=${MINER_HK_NAME_0}
       - --grant-mode=presigned
       - --assignment-crypto=ed25519
@@ -64,22 +64,22 @@ services:
       - --poll-interval=0.5
       - --s3-bucket=${S3_BUCKET}
       - --s3-region=${S3_REGION:-us-east-1}
-      - --miner-secret=${LOCUS_MINER_SECRET}
+      - --miner-secret=${TEUTON_MINER_SECRET}
     deploy: { resources: { reservations: { devices: [{ driver: nvidia, device_ids: ["0"], capabilities: [gpu] }] } } }
 
   miner-gpu1:
     <<: *miner-common
-    container_name: locus-miner-gpu1
+    container_name: teuton-miner-gpu1
     environment:
       <<: *miner-env
       NVIDIA_VISIBLE_DEVICES: "1"
       BT_HOTKEY_NAME: ${MINER_HK_NAME_1}
     command:
-      - --netuid=${LOCUS_NETUID:-3}
+      - --netuid=${TEUTON_NETUID:-3}
       - --hotkey=${MINER_HK_SS58_1}
       - --devices=cuda:0
       - --wallet-path=/root/.bittensor/wallets
-      - --wallet-name=${MINER_WALLET_NAME:-locus_mining}
+      - --wallet-name=${MINER_WALLET_NAME:-teuton_mining}
       - --hotkey-name=${MINER_HK_NAME_1}
       - --grant-mode=presigned
       - --assignment-crypto=ed25519
@@ -87,22 +87,22 @@ services:
       - --poll-interval=0.5
       - --s3-bucket=${S3_BUCKET}
       - --s3-region=${S3_REGION:-us-east-1}
-      - --miner-secret=${LOCUS_MINER_SECRET}
+      - --miner-secret=${TEUTON_MINER_SECRET}
     deploy: { resources: { reservations: { devices: [{ driver: nvidia, device_ids: ["1"], capabilities: [gpu] }] } } }
 
   miner-gpu2:
     <<: *miner-common
-    container_name: locus-miner-gpu2
+    container_name: teuton-miner-gpu2
     environment:
       <<: *miner-env
       NVIDIA_VISIBLE_DEVICES: "2"
       BT_HOTKEY_NAME: ${MINER_HK_NAME_2}
     command:
-      - --netuid=${LOCUS_NETUID:-3}
+      - --netuid=${TEUTON_NETUID:-3}
       - --hotkey=${MINER_HK_SS58_2}
       - --devices=cuda:0
       - --wallet-path=/root/.bittensor/wallets
-      - --wallet-name=${MINER_WALLET_NAME:-locus_mining}
+      - --wallet-name=${MINER_WALLET_NAME:-teuton_mining}
       - --hotkey-name=${MINER_HK_NAME_2}
       - --grant-mode=presigned
       - --assignment-crypto=ed25519
@@ -110,22 +110,22 @@ services:
       - --poll-interval=0.5
       - --s3-bucket=${S3_BUCKET}
       - --s3-region=${S3_REGION:-us-east-1}
-      - --miner-secret=${LOCUS_MINER_SECRET}
+      - --miner-secret=${TEUTON_MINER_SECRET}
     deploy: { resources: { reservations: { devices: [{ driver: nvidia, device_ids: ["2"], capabilities: [gpu] }] } } }
 
   miner-gpu3:
     <<: *miner-common
-    container_name: locus-miner-gpu3
+    container_name: teuton-miner-gpu3
     environment:
       <<: *miner-env
       NVIDIA_VISIBLE_DEVICES: "3"
       BT_HOTKEY_NAME: ${MINER_HK_NAME_3}
     command:
-      - --netuid=${LOCUS_NETUID:-3}
+      - --netuid=${TEUTON_NETUID:-3}
       - --hotkey=${MINER_HK_SS58_3}
       - --devices=cuda:0
       - --wallet-path=/root/.bittensor/wallets
-      - --wallet-name=${MINER_WALLET_NAME:-locus_mining}
+      - --wallet-name=${MINER_WALLET_NAME:-teuton_mining}
       - --hotkey-name=${MINER_HK_NAME_3}
       - --grant-mode=presigned
       - --assignment-crypto=ed25519
@@ -133,12 +133,12 @@ services:
       - --poll-interval=0.5
       - --s3-bucket=${S3_BUCKET}
       - --s3-region=${S3_REGION:-us-east-1}
-      - --miner-secret=${LOCUS_MINER_SECRET}
+      - --miner-secret=${TEUTON_MINER_SECRET}
     deploy: { resources: { reservations: { devices: [{ driver: nvidia, device_ids: ["3"], capabilities: [gpu] }] } } }
 
   watchtower:
     image: containrrr/watchtower:latest
-    container_name: locus-watchtower
+    container_name: teuton-miners-watchtower
     restart: always
     environment:
       WATCHTOWER_LABEL_ENABLE: "true"

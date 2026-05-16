@@ -21,9 +21,9 @@ export AWS_SECRET_ACCESS_KEY=...
 Dev signature secrets:
 
 ```bash
-export LOCUS_OWNER_SECRET=owner-dev-secret
-export LOCUS_MINER_SECRET=miner-dev-secret
-export LOCUS_VALIDATOR_SECRET=validator-dev-secret
+export TEUTON_OWNER_SECRET=owner-dev-secret
+export TEUTON_MINER_SECRET=miner-dev-secret
+export TEUTON_VALIDATOR_SECRET=validator-dev-secret
 ```
 
 All three must match the secrets used by the orchestrator, miners, and
@@ -36,7 +36,7 @@ Dry-run mode computes scores and prints a weight payload without calling the
 chain:
 
 ```bash
-locus-v3 validator \
+teuton-v3 validator \
   --run-id RUN_ID \
   --sample-rate 1.0 \
   --publish-weights
@@ -45,7 +45,7 @@ locus-v3 validator \
 With explicit S3 flags:
 
 ```bash
-locus-v3 validator \
+teuton-v3 validator \
   --run-id RUN_ID \
   --sample-rate 1.0 \
   --publish-weights \
@@ -65,7 +65,7 @@ source .venv/bin/activate
 Then run:
 
 ```bash
-locus-v3 validator \
+teuton-v3 validator \
   --run-id RUN_ID \
   --validator-hotkey VALIDATOR_HOTKEY \
   --sample-rate 1.0 \
@@ -135,7 +135,7 @@ Receipts may arrive after the first validator pass. It is safe to run the
 validator again:
 
 ```bash
-locus-v3 validator --run-id RUN_ID --sample-rate 1.0 --publish-weights
+teuton-v3 validator --run-id RUN_ID --sample-rate 1.0 --publish-weights
 ```
 
 Already-verdict receipts are skipped; new receipts are replayed and added to

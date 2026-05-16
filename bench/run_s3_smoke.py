@@ -1,7 +1,7 @@
 """Smoke test: run the Stage-0 `mlp` task against the real S3 bucket.
 
 Usage:
-    cd Locus && source .venv/bin/activate
+    cd Teuton && source .venv/bin/activate
     python -m bench.run_s3_smoke
 
 Reads bucket name + AWS creds from `../.env`. Runs the orchestrator + 4
@@ -17,14 +17,14 @@ from pathlib import Path
 
 
 def _load_env() -> None:
-    """Load the .env file living at the project root (one level above Locus)."""
+    """Load the .env file living at the project root (one level above Teuton)."""
     try:
         from dotenv import load_dotenv
     except ImportError:
         print("python-dotenv not installed; relying on inherited env")
         return
-    # Locus/.env or ../.env
-    here = Path(__file__).resolve().parent.parent           # Locus/
+    # Teuton/.env or ../.env
+    here = Path(__file__).resolve().parent.parent           # Teuton/
     candidates = [here / ".env", here.parent / ".env"]
     for p in candidates:
         if p.exists():
@@ -36,9 +36,9 @@ def _load_env() -> None:
 def main() -> int:
     _load_env()
 
-    from locus_legacy_v2.storage import S3Bucket
-    from locus_legacy_v2.main import run_in_process
-    from locus import paths
+    from teuton_legacy_v2.storage import S3Bucket
+    from teuton_legacy_v2.main import run_in_process
+    from teuton import paths
 
     bucket_name = os.environ.get("S3_BUCKET")
     region = os.environ.get("S3_REGION", "us-east-1")
@@ -64,9 +64,9 @@ def main() -> int:
     # Sanity check: round-trip a tiny probe blob to confirm credentials.
     probe_uri = bucket.uri_for_key(f"_smoke_probe/probe_{int(time.time())}.txt")
     print(f"[probe] writing -> {probe_uri}")
-    bucket.put(probe_uri, b"locus-smoke-test")
+    bucket.put(probe_uri, b"teuton-smoke-test")
     body = bucket.get(probe_uri)
-    assert body == b"locus-smoke-test", "probe round-trip failed"
+    assert body == b"teuton-smoke-test", "probe round-trip failed"
     bucket.delete(probe_uri)
     print("[probe] credentials verified")
 
@@ -109,7 +109,7 @@ def main() -> int:
 
     # Final-round weights
     print("\n[weights] final-round byte sizes:")
-    from locus_legacy_v2.tasks.mlp import N_UB
+    from teuton_legacy_v2.tasks.mlp import N_UB
     for ub in range(N_UB):
         uri = bucket.uri_for_key(paths.weights_key(run_id, max_rounds, ub))
         h = bucket.head(uri)

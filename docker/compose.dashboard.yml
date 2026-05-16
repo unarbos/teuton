@@ -1,4 +1,4 @@
-# Public Locus dashboard stack:
+# Public Teuton dashboard stack:
 #   discovery-ui  reads the bucket and serves the live fleet view on :8765
 #   cloudflared   opens an outbound Cloudflare Tunnel and routes
 #                 https://<HOSTNAME> -> http://discovery-ui:8765
@@ -7,40 +7,40 @@
 # network). cloudflared only makes outbound connections to Cloudflare's
 # edge, so it works behind NAT / firewalls / DinD pods.
 #
-# Required env on the remote (via /root/locus/.env):
+# Required env on the remote (via /root/teuton/.env):
 #   DOCKER_USER, S3_BUCKET, S3_REGION, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY,
-#   LOCUS_NETUID (default 3), LOCUS_DASHBOARD_TUNNEL_TOKEN
+#   TEUTON_NETUID (default 3), TEUTON_DASHBOARD_TUNNEL_TOKEN
 #
 # To set everything up the first time, run scripts/setup_cloudflare_dashboard.py
 # locally with a Cloudflare API token; it creates the tunnel, the public
 # hostname route, and the DNS record, then prints the tunnel token to drop
-# into LOCUS_DASHBOARD_TUNNEL_TOKEN here.
-name: locus-dashboard
+# into TEUTON_DASHBOARD_TUNNEL_TOKEN here.
+name: teuton-dashboard
 
 services:
   discovery-ui:
-    image: ${DOCKER_USER}/locus:miner
-    container_name: locus-dashboard-ui
+    image: ${DOCKER_USER}/teuton:miner
+    container_name: teuton-dashboard-ui
     restart: always
     pull_policy: always
     environment:
-      LOCUS_ROLE: shell
+      TEUTON_ROLE: shell
       S3_BUCKET: ${S3_BUCKET}
       S3_REGION: ${S3_REGION:-us-east-1}
       S3_ENDPOINT_URL: ${S3_ENDPOINT_URL:-}
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
     entrypoint:
-      - locus-v3
+      - teuton-v3
       - discovery-ui
     command:
-      - --netuid=${LOCUS_NETUID:-3}
+      - --netuid=${TEUTON_NETUID:-3}
       - --host=0.0.0.0
       - --port=8765
-      - --refresh-sec=${LOCUS_DASHBOARD_REFRESH_SEC:-3.0}
-      - --snapshot-cache-sec=${LOCUS_DASHBOARD_CACHE_SEC:-1.5}
-      - --max-jobs=${LOCUS_DASHBOARD_MAX_JOBS:-500}
-      - --max-artifacts=${LOCUS_DASHBOARD_MAX_ARTIFACTS:-300}
+      - --refresh-sec=${TEUTON_DASHBOARD_REFRESH_SEC:-3.0}
+      - --snapshot-cache-sec=${TEUTON_DASHBOARD_CACHE_SEC:-1.5}
+      - --max-jobs=${TEUTON_DASHBOARD_MAX_JOBS:-500}
+      - --max-artifacts=${TEUTON_DASHBOARD_MAX_ARTIFACTS:-300}
       - --s3-bucket=${S3_BUCKET}
       - --s3-region=${S3_REGION:-us-east-1}
     expose:
@@ -52,12 +52,12 @@ services:
 
   cloudflared:
     image: cloudflare/cloudflared:latest
-    container_name: locus-dashboard-tunnel
+    container_name: teuton-dashboard-tunnel
     restart: always
     depends_on:
       - discovery-ui
     environment:
-      TUNNEL_TOKEN: ${LOCUS_DASHBOARD_TUNNEL_TOKEN}
+      TUNNEL_TOKEN: ${TEUTON_DASHBOARD_TUNNEL_TOKEN}
       TUNNEL_METRICS: "0.0.0.0:2000"
     command:
       - tunnel
@@ -73,7 +73,7 @@ services:
 
   watchtower:
     image: containrrr/watchtower:latest
-    container_name: locus-dashboard-watchtower
+    container_name: teuton-dashboard-watchtower
     restart: always
     environment:
       WATCHTOWER_LABEL_ENABLE: "true"
@@ -92,5 +92,5 @@ services:
 
 networks:
   dashboard:
-    name: locus-dashboard
+    name: teuton-dashboard
     driver: bridge

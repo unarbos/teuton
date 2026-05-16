@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Idempotent setup for a Lium GPU box: python3-venv, rsync, .venv with
-# torch (cpu wheel, ~200MB), boto3, python-dotenv. Locus source itself is
+# torch (cpu wheel, ~200MB), boto3, python-dotenv. Teuton source itself is
 # rsynced separately.
 set -euo pipefail
 

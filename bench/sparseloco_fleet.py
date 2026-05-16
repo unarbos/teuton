@@ -44,15 +44,15 @@ import torch.nn.functional as F
 
 
 # Reuse model + helpers from the local validation script
-sys.path.insert(0, "/root/Locus")
+sys.path.insert(0, "/root/Teuton")
 from bench.sparseloco_moe_validation import (  # noqa: E402
     Cfg, GPT, evaluate, shard_iter, snapshot_params, write_params,
     diff_params, apply_outer, sparseloco_compress,
     chunked_topk_quant_encode, chunked_topk_quant_decode,
 )
 
-from locus_legacy_v2.storage import S3Bucket  # noqa: E402
-from locus import tensor_io  # noqa: E402
+from teuton_legacy_v2.storage import S3Bucket  # noqa: E402
+from teuton import tensor_io  # noqa: E402
 
 
 def _build_bucket():
@@ -268,7 +268,7 @@ def cmd_worker(args):
     print(log_pfx + f"model loaded: {n_params / 1e6:.1f}M params", flush=True)
 
     # ----- download tokens -----
-    local_tokens = "/workspace/locus_data/tokens.bin"
+    local_tokens = "/workspace/teuton_data/tokens.bin"
     _download_tokens(bucket, args.tokens_uri, local_tokens)
     body = Path(local_tokens).read_bytes()
     tokens = tensor_io.decode_tensor(body).to(torch.long)

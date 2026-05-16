@@ -4,9 +4,9 @@ V2 established the bucket-native tensor language that v3 keeps: content-addresse
 
 ## Preserved In Code
 
-- `locus_core.ir`, `locus_runtime.eval`, `locus_runtime.tensor_io`, and `locus_runtime.storage` carry the core IR/evaluator/wire/storage behavior forward.
-- `locus_legacy_v2` preserves the full v2 runtime, scheduler, worker, validator, data utilities, and task catalog under a v3-owned package name.
-- `locus_tasks` exposes wrappers for the v2 task catalog while keeping the v3 `mlp` smoke path as the default subnet task.
+- `teuton_core.ir`, `teuton_runtime.eval`, `teuton_runtime.tensor_io`, and `teuton_runtime.storage` carry the core IR/evaluator/wire/storage behavior forward.
+- `teuton_legacy_v2` preserves the full v2 runtime, scheduler, worker, validator, data utilities, and task catalog under a v3-owned package name.
+- `teuton_tasks` exposes wrappers for the v2 task catalog while keeping the v3 `mlp` smoke path as the default subnet task.
 
 ## Protocol Difference
 

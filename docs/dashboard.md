@@ -1,6 +1,6 @@
 # Public Dashboard
 
-The Locus discovery UI (`locus-v3 discovery-ui`) ships with a Docker stack
+The Teuton discovery UI (`teuton-v3 discovery-ui`) ships with a Docker stack
 that exposes it on a public hostname through a Cloudflare Tunnel — no
 inbound port has to be opened on the host.
 
@@ -22,7 +22,7 @@ Default deployment:
               v                                   ^
        Cloudflare Tunnel  <----- WSS tunnel ----- cloudflared
                                                        |
-                                            (network: locus-dashboard)
+                                            (network: teuton-dashboard)
                                                        |
                                                        v
                                              discovery-ui :8765
@@ -40,7 +40,7 @@ Default deployment:
   driver that creates/reuses a tunnel, writes the public hostname route,
   upserts the DNS CNAME, and prints the tunnel token.
 - `scripts/deploy_dashboard.sh` — wraps the Cloudflare setup, then SSHes
-  to the host, drops `/root/locus/.env`, scps the compose file, logs in
+  to the host, drops `/root/teuton/.env`, scps the compose file, logs in
   to Docker Hub, and brings the stack up.
 
 ## Prerequisites
@@ -65,8 +65,8 @@ The host you deploy to needs:
 - Docker (≥ 24) — no NVIDIA driver required, the dashboard is CPU-only.
 - Outbound HTTPS to `*.cloudflare.com` and `cloudflared`'s tunnel
   endpoints (open by default on every Lium pod we use).
-- A Docker Hub login (the host pulls `${DOCKER_USER}/locus:miner`,
-  which already contains `locus-v3`).
+- A Docker Hub login (the host pulls `${DOCKER_USER}/teuton:miner`,
+  which already contains `teuton-v3`).
 
 ## One-shot Deploy
 
@@ -84,9 +84,9 @@ doppler run --project arbos --config dev -- \
 The script will:
 
 1. Call the Cloudflare API to create (or reuse) a tunnel named
-   `locus-dashboard`, route `dashboard.teutonic.ai → http://discovery-ui:8765`,
+   `teuton-dashboard`, route `dashboard.teutonic.ai → http://discovery-ui:8765`,
    and upsert the proxied CNAME on the `teutonic.ai` zone.
-2. Capture the tunnel token, SSH to the host, write `/root/locus/.env`
+2. Capture the tunnel token, SSH to the host, write `/root/teuton/.env`
    with the token + bucket creds, scp `docker/compose.dashboard.yml`,
    `docker login`, then `docker compose pull && up -d`.
 3. Print the public URL and `docker logs` follow commands.
@@ -103,35 +103,35 @@ If you'd rather drive this by hand:
 doppler run --project arbos --config dev -- \
     python scripts/setup_cloudflare_dashboard.py \
         --hostname dashboard.teutonic.ai \
-        --tunnel-name locus-dashboard
+        --tunnel-name teuton-dashboard
 
-# Copy the printed `LOCUS_DASHBOARD_TUNNEL_TOKEN=...` line.
+# Copy the printed `TEUTON_DASHBOARD_TUNNEL_TOKEN=...` line.
 
-# 2. On the host, drop /root/locus/.env (chmod 600):
-cat > /root/locus/.env <<'EOF'
+# 2. On the host, drop /root/teuton/.env (chmod 600):
+cat > /root/teuton/.env <<'EOF'
 DOCKER_USER=...
 S3_BUCKET=...
 S3_REGION=us-east-1
 AWS_ACCESS_KEY_ID=...
 AWS_SECRET_ACCESS_KEY=...
-LOCUS_NETUID=3
-LOCUS_DASHBOARD_TUNNEL_TOKEN=<token from step 1>
+TEUTON_NETUID=3
+TEUTON_DASHBOARD_TUNNEL_TOKEN=<token from step 1>
 EOF
-chmod 600 /root/locus/.env
+chmod 600 /root/teuton/.env
 
 # 3. Push the compose file and bring it up.
-scp docker/compose.dashboard.yml root@<host>:/root/locus/compose.yml
-ssh root@<host> 'cd /root/locus && docker compose pull && docker compose up -d'
+scp docker/compose.dashboard.yml root@<host>:/root/teuton/compose.yml
+ssh root@<host> 'cd /root/teuton && docker compose pull && docker compose up -d'
 ```
 
 ## Verifying
 
 ```bash
 # 1. Tunnel handshake (look for "Registered tunnel connection ...")
-ssh root@<host> docker logs --tail=200 locus-dashboard-tunnel
+ssh root@<host> docker logs --tail=200 teuton-dashboard-tunnel
 
 # 2. UI process (look for "[discovery-ui] serving http://0.0.0.0:8765")
-ssh root@<host> docker logs --tail=200 locus-dashboard-ui
+ssh root@<host> docker logs --tail=200 teuton-dashboard-ui
 
 # 3. Edge view from anywhere on the internet
 curl -I https://dashboard.teutonic.ai/
@@ -143,19 +143,19 @@ curl https://dashboard.teutonic.ai/api/snapshot | jq '.meta'
 
 ## Operations
 
-- **Refresh cadence** — change `LOCUS_DASHBOARD_REFRESH_SEC` /
-  `LOCUS_DASHBOARD_CACHE_SEC` in `/root/locus/.env` and `docker compose
+- **Refresh cadence** — change `TEUTON_DASHBOARD_REFRESH_SEC` /
+  `TEUTON_DASHBOARD_CACHE_SEC` in `/root/teuton/.env` and `docker compose
   up -d` to apply. Defaults are 3 s page refresh on a 1.5 s server-side
   cache, which keeps the bucket-list cost negligible while still feeling
   live.
 - **Run filter** — by default the UI shows the latest run found in the
   bucket. To pin to a specific run, append `--run-id ...` to the
   `discovery-ui` command in `compose.dashboard.yml` and redeploy.
-- **Restart the tunnel** — `docker restart locus-dashboard-tunnel`.
+- **Restart the tunnel** — `docker restart teuton-dashboard-tunnel`.
   Cloudflare keeps the tunnel id stable across restarts, so the public
   URL doesn't change.
 - **Rotate the tunnel token** — re-run `setup_cloudflare_dashboard.py`,
-  then update `LOCUS_DASHBOARD_TUNNEL_TOKEN` and `docker compose up -d`.
+  then update `TEUTON_DASHBOARD_TUNNEL_TOKEN` and `docker compose up -d`.
 - **Take it down** — `docker compose down` on the host. The Cloudflare
   Tunnel stays registered (in case you want to bring it back); to fully
   delete it, remove the tunnel from the Cloudflare Zero Trust dashboard.
@@ -177,11 +177,11 @@ edge before the tunnel.
 ## Troubleshooting
 
 - **`Unable to reach the origin service`** in the cloudflared logs — the
-  `discovery-ui` container is not on the same `locus-dashboard` docker
+  `discovery-ui` container is not on the same `teuton-dashboard` docker
   network, or it crashed. `docker compose ps` and `docker logs
-  locus-dashboard-ui`.
+  teuton-dashboard-ui`.
 - **`522` from Cloudflare** — the origin (`discovery-ui`) is up but slow.
-  Bump `LOCUS_DASHBOARD_CACHE_SEC` so the snapshot is served from cache
+  Bump `TEUTON_DASHBOARD_CACHE_SEC` so the snapshot is served from cache
   rather than a fresh bucket scan on every poll.
 - **`530 1014 CNAME flattening to ...cfargotunnel.com`** — the DNS record
   exists but isn't proxied. Re-run `setup_cloudflare_dashboard.py` (or

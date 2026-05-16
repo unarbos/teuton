@@ -1,4 +1,4 @@
-"""Run Locus jobs on an SSH worker using only presigned grants.
+"""Run Teuton jobs on an SSH worker using only presigned grants.
 
 The dispatcher runs on a trusted machine with bucket access. The remote worker
 receives only public job metadata, graph JSON, its hotkey identity, and
@@ -15,17 +15,17 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from locus_core import paths
-from locus_core.cli import build_bucket
-from locus_core.protocol import AssignmentGrantV3, EncryptedAssignmentGrantV3, JobManifestV3, JobReceiptV3, MinerIdentity, WorkerIdentity
-from locus_core.signatures import verify_dict
-from locus_core.wallet_crypto import DevAssignmentCrypto, Ed25519SealedBoxAssignmentCrypto
-from locus_runtime.discovery import build_discovery_backend
-from locus_runtime.distributed_executor import DistributedJobExecutor
-from locus_runtime.executor import JobExecutor
-from locus_runtime.storage import ObjectStore
-from locus_runtime.transport import PresignedArtifactTransport
-from locus_validator.audit import AuditReplayConfig, AuditReplayRunner
+from teuton_core import paths
+from teuton_core.cli import build_bucket
+from teuton_core.protocol import AssignmentGrantV3, EncryptedAssignmentGrantV3, JobManifestV3, JobReceiptV3, MinerIdentity, WorkerIdentity
+from teuton_core.signatures import verify_dict
+from teuton_core.wallet_crypto import DevAssignmentCrypto, Ed25519SealedBoxAssignmentCrypto
+from teuton_runtime.discovery import build_discovery_backend
+from teuton_runtime.distributed_executor import DistributedJobExecutor
+from teuton_runtime.executor import JobExecutor
+from teuton_runtime.storage import ObjectStore
+from teuton_runtime.transport import PresignedArtifactTransport
+from teuton_validator.audit import AuditReplayConfig, AuditReplayRunner
 
 
 @dataclass
@@ -196,7 +196,7 @@ def dispatch_job(args: argparse.Namespace, bucket: ObjectStore, manifest: JobMan
         "miner_secret": args.miner_secret,
     }
     target = f"{args.user}@{args.host}"
-    remote = "cd /root/locus && source .venv/bin/activate && python -m bench.presigned_ssh_worker execute"
+    remote = "cd /root/teuton && source .venv/bin/activate && python -m bench.presigned_ssh_worker execute"
     cmd = ["ssh", "-p", str(args.port), "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new", target, remote]
     subprocess.run(cmd, input=json.dumps(bundle).encode("utf-8"), check=True)
 
@@ -290,8 +290,8 @@ def build_parser() -> argparse.ArgumentParser:
     dispatch.add_argument("--owner-secret", default="owner-dev-secret")
     dispatch.add_argument("--poll-interval", type=float, default=0.2)
     dispatch.add_argument("--timeout-sec", type=float, default=900.0)
-    dispatch.add_argument("--local-root", default="/tmp/locus-v3")
-    dispatch.add_argument("--bucket", default="locus-v3")
+    dispatch.add_argument("--local-root", default="/tmp/teuton-v3")
+    dispatch.add_argument("--bucket", default="teuton-v3")
     dispatch.add_argument("--s3-bucket", default="")
     dispatch.add_argument("--s3-region", default="us-east-1")
     dispatch.add_argument("--s3-endpoint-url", default="")

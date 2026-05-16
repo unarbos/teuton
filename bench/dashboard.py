@@ -21,7 +21,7 @@ from pathlib import Path
 
 def _load_env() -> None:
     from dotenv import load_dotenv
-    for p in [Path("/root/.env"), Path("/root/Locus/.env"),
+    for p in [Path("/root/.env"), Path("/root/Teuton/.env"),
               Path(__file__).resolve().parent.parent.parent / ".env"]:
         if p.exists():
             load_dotenv(p, override=True)
@@ -29,7 +29,7 @@ def _load_env() -> None:
 
 
 def _build_bucket():
-    from locus_legacy_v2.storage import S3Bucket
+    from teuton_legacy_v2.storage import S3Bucket
     return S3Bucket(
         bucket=os.environ["S3_BUCKET"],
         region=os.environ.get("S3_REGION", "us-east-1"),
@@ -59,9 +59,9 @@ def main() -> int:
                    help="Print the table once and exit (instead of polling).")
     args = p.parse_args()
 
-    from locus import paths
-    from locus_legacy_v2.types import WorkerInfo
-    from locus_legacy_v2.config import WORKER_STALE_SEC
+    from teuton import paths
+    from teuton_legacy_v2.types import WorkerInfo
+    from teuton_legacy_v2.config import WORKER_STALE_SEC
 
     bucket = _build_bucket()
 

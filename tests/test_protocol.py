@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from locus_core.protocol import (
+from teuton_core.protocol import (
     ArtifactDigest,
     ArtifactRef,
     GraphRef,
@@ -11,7 +11,7 @@ from locus_core.protocol import (
     VerificationVerdictV3,
     WorkerIdentity,
 )
-from locus_core.signatures import verify_dict
+from teuton_core.signatures import verify_dict
 
 
 def test_manifest_hash_and_signature_round_trip() -> None:

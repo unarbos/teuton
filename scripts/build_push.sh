@@ -1,22 +1,22 @@
 #!/usr/bin/env bash
-# Build the Locus runtime image and push it under three Docker Hub tags so
+# Build the Teuton runtime image and push it under three Docker Hub tags so
 # Watchtower on each role can independently roll out updates:
-#   $DOCKER_USER/locus:miner
-#   $DOCKER_USER/locus:validator
-#   $DOCKER_USER/locus:auditor
+#   $DOCKER_USER/teuton:miner
+#   $DOCKER_USER/teuton:validator
+#   $DOCKER_USER/teuton:auditor
 #
 # Usage:
 #   ./scripts/build_push.sh                       # builds + pushes all three tags
 #   ./scripts/build_push.sh miner                 # only the :miner tag
 #   ./scripts/build_push.sh validator auditor
 #   ./scripts/build_push.sh --run-id sn3-2026-05-15  # bake run id into image
-#   ./scripts/build_push.sh --run-id-file /tmp/locus_sn3_run_id miner
+#   ./scripts/build_push.sh --run-id-file /tmp/teuton_sn3_run_id miner
 #
 # The --run-id (or --run-id-file) value is baked into the image as
-# LOCUS_BAKED_RUN_ID. When Watchtower then pulls the new image and restarts
+# TEUTON_BAKED_RUN_ID. When Watchtower then pulls the new image and restarts
 # the container, the miner/validator/auditor entrypoint resolves
-# LOCUS_RUN_ID to that baked value (unless the host has an explicit RUN_ID /
-# LOCUS_RUN_ID in /root/locus/.env). This is how you flip the whole fleet
+# TEUTON_RUN_ID to that baked value (unless the host has an explicit RUN_ID /
+# TEUTON_RUN_ID in /root/teuton/.env). This is how you flip the whole fleet
 # onto a new run without touching any host.
 #
 # Auth comes from Doppler arbos/dev. We require DOCKER_USER and DOCKER_PAT to
@@ -57,10 +57,10 @@ if [ -z "$RUN_ID" ]; then
     if [ -n "$RUN_ID_FILE" ]; then
         [ -f "$RUN_ID_FILE" ] || { echo "error: --run-id-file does not exist: $RUN_ID_FILE" >&2; exit 1; }
         RUN_ID=$(tr -d '[:space:]' < "$RUN_ID_FILE")
-    elif [ -n "${LOCUS_RUN_ID:-}" ]; then
-        RUN_ID="$LOCUS_RUN_ID"
-    elif [ -f "/tmp/locus_sn3_run_id" ]; then
-        RUN_ID=$(tr -d '[:space:]' < /tmp/locus_sn3_run_id)
+    elif [ -n "${TEUTON_RUN_ID:-}" ]; then
+        RUN_ID="$TEUTON_RUN_ID"
+    elif [ -f "/tmp/teuton_sn3_run_id" ]; then
+        RUN_ID=$(tr -d '[:space:]' < /tmp/teuton_sn3_run_id)
     fi
 fi
 
@@ -82,7 +82,7 @@ GIT_SHA=$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo dev)
 BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
 # Use a dedicated buildx builder so concurrent runs don't fight over cache.
-BUILDER_NAME=locus-builder
+BUILDER_NAME=teuton-builder
 if ! docker buildx inspect "$BUILDER_NAME" >/dev/null 2>&1; then
     docker buildx create --name "$BUILDER_NAME" --driver docker-container --use >/dev/null
 else
@@ -99,19 +99,19 @@ echo "$DOCKER_PAT" | docker login -u "$DOCKER_USER" --password-stdin
 
 TAG_ARGS=()
 for t in "${TAGS[@]}"; do
-    TAG_ARGS+=("-t" "$(doppler secrets get DOCKER_USER --plain --project arbos --config dev)/locus:${t}")
+    TAG_ARGS+=("-t" "$(doppler secrets get DOCKER_USER --plain --project arbos --config dev)/teuton:${t}")
 done
 
 # Always also push :latest for convenience when we touch all three.
 if [ "${#TAGS[@]}" -eq 3 ]; then
-    TAG_ARGS+=("-t" "$(doppler secrets get DOCKER_USER --plain --project arbos --config dev)/locus:latest")
+    TAG_ARGS+=("-t" "$(doppler secrets get DOCKER_USER --plain --project arbos --config dev)/teuton:latest")
 fi
 
 if [ -n "$RUN_ID" ]; then
     echo "[build_push] git=${GIT_SHA} build_time=${BUILD_TIME} tags=${TAGS[*]} baked_run_id=${RUN_ID}"
 else
     echo "[build_push] git=${GIT_SHA} build_time=${BUILD_TIME} tags=${TAGS[*]} baked_run_id=<none>"
-    echo "[build_push] note: no --run-id supplied; image will rely on host RUN_ID/LOCUS_RUN_ID at runtime."
+    echo "[build_push] note: no --run-id supplied; image will rely on host RUN_ID/TEUTON_RUN_ID at runtime."
 fi
 # --provenance=false / --sbom=false: skip OCI attestations so the resulting
 # push is a plain Docker v2 single-platform manifest (no image-index wrapper).
@@ -122,7 +122,7 @@ docker buildx build \
     --file docker/Dockerfile \
     --build-arg GIT_SHA="$GIT_SHA" \
     --build-arg BUILD_TIME="$BUILD_TIME" \
-    --build-arg LOCUS_RUN_ID="$RUN_ID" \
+    --build-arg TEUTON_RUN_ID="$RUN_ID" \
     --provenance=false \
     --sbom=false \
     --output type=registry,oci-mediatypes=false \

@@ -1,5 +1,5 @@
 {
-  "run_id_file": "/tmp/locus_sn3_run_id",
+  "run_id_file": "/tmp/teuton_sn3_run_id",
   "netuid": 3,
   "network": "finney",
   "auditor": {
@@ -10,23 +10,23 @@
     "gpu_count": 8,
     "compose": "docker/compose.auditor.yml",
     "hotkeys": [
-      {"index": 0, "name": "locus_auditor_sn3_0", "ss58": "5HYkwkikXLXWgEtD4GBGiNnDiDUj9XJZZvqstbWWQm7nx1LK"},
-      {"index": 1, "name": "locus_auditor_sn3_1", "ss58": "5FCvd3KVExbpbRxJUvVRg2i92ijYxdsSn3Yh5kps29FpLEjf"},
-      {"index": 2, "name": "locus_auditor_sn3_2", "ss58": "5E1PDaXBaaa5y9DayF12ghepFjR7UATuFfY33jZK9LbgDPpr"},
-      {"index": 3, "name": "locus_auditor_sn3_3", "ss58": "5H3hg5H8ekL5U2Jhv5kkiFje2PFxuiGjmaHqKXKok2ydZNJ2"},
-      {"index": 4, "name": "locus_auditor_sn3_4", "ss58": "5Cstnb1wheLEdsxx79CQ5uEWbfbYKbDoX1XdpwkGgUvpf8vX"},
-      {"index": 5, "name": "locus_auditor_sn3_5", "ss58": "5GrzvFzGEhP2LBHtPBTJBoH3RNMUYVG4vMMSVS6oCNswXu4C"},
-      {"index": 6, "name": "locus_auditor_sn3_6", "ss58": "5CawwAJfHua1sGCv5ALEHhuTQeARrPYG7tChvN5DMoZqoT3b"},
-      {"index": 7, "name": "locus_auditor_sn3_7", "ss58": "5DsiL2AjfHekTg3qyNNFRhAgwdhb7TwJHr8ajUNvQAobN8Nx"}
+      {"index": 0, "name": "teuton_auditor_sn3_0", "ss58": "5HYkwkikXLXWgEtD4GBGiNnDiDUj9XJZZvqstbWWQm7nx1LK"},
+      {"index": 1, "name": "teuton_auditor_sn3_1", "ss58": "5FCvd3KVExbpbRxJUvVRg2i92ijYxdsSn3Yh5kps29FpLEjf"},
+      {"index": 2, "name": "teuton_auditor_sn3_2", "ss58": "5E1PDaXBaaa5y9DayF12ghepFjR7UATuFfY33jZK9LbgDPpr"},
+      {"index": 3, "name": "teuton_auditor_sn3_3", "ss58": "5H3hg5H8ekL5U2Jhv5kkiFje2PFxuiGjmaHqKXKok2ydZNJ2"},
+      {"index": 4, "name": "teuton_auditor_sn3_4", "ss58": "5Cstnb1wheLEdsxx79CQ5uEWbfbYKbDoX1XdpwkGgUvpf8vX"},
+      {"index": 5, "name": "teuton_auditor_sn3_5", "ss58": "5GrzvFzGEhP2LBHtPBTJBoH3RNMUYVG4vMMSVS6oCNswXu4C"},
+      {"index": 6, "name": "teuton_auditor_sn3_6", "ss58": "5CawwAJfHua1sGCv5ALEHhuTQeARrPYG7tChvN5DMoZqoT3b"},
+      {"index": 7, "name": "teuton_auditor_sn3_7", "ss58": "5DsiL2AjfHekTg3qyNNFRhAgwdhb7TwJHr8ajUNvQAobN8Nx"}
     ]
   },
   "miners": [
-    {"slot": 1, "pod_id": "444277c6-f845-44e5-bf60-56a92a23cadf", "huid": "brave-fox-76", "ssh": {"host": "216.81.248.222", "port": 46980, "user": "root"}, "gpu_type": "A6000", "gpu_count": 1, "compose": "docker/compose.miner.yml", "hotkey": {"name": "locus_miner_sn3_1", "ss58": "5EsaSvMVXmY4ovWia7PsUHhZKi7eeqVkoZwcCBBr9Qzo8gM8"}},
-    {"slot": 2, "pod_id": "3b9a3f43-41b8-4bb6-891b-efab58657d2e", "huid": "swift-eagle-d2", "ssh": {"host": "216.81.248.218", "port": 20299, "user": "root"}, "gpu_type": "A6000", "gpu_count": 1, "compose": "docker/compose.miner.yml", "hotkey": {"name": "locus_miner_sn3_2", "ss58": "5FeYFXovNw37vf4gUZArD5rUzda8Haj1njhLf8TP6bc1ZDL1"}},
-    {"slot": 3, "pod_id": "c0c9d1c0-1837-4b9d-9239-d3f2f3d1e7d9", "huid": "golden-hawk-f9", "ssh": {"host": "91.224.44.226", "port": 20815, "user": "root"}, "gpu_type": "RTX3090", "gpu_count": 1, "compose": "docker/compose.miner.yml", "hotkey": {"name": "locus_miner_sn3_3", "ss58": "5FPKkvBKyuhhXKnYHmRRupYeWoJJHQ5CSkv7atAfFj8UfUYp"}},
-    {"slot": 4, "pod_id": "0c47f133-fa7c-47b7-bcec-7cfa872da72c", "huid": "golden-orbit-b1", "ssh": {"host": "91.224.44.226", "port": 20609, "user": "root"}, "gpu_type": "RTX3090", "gpu_count": 1, "compose": "docker/compose.miner.yml", "hotkey": {"name": "locus_miner_sn3_4", "ss58": "5E2UjCLGwCsnV1gZPZvQSkr1i91JNtReLXWKojCb9SVBtXAP"}},
-    {"slot": 5, "pod_id": "1d7f37fa-9c7b-4e22-bbf8-6217262f274a", "huid": "cosmic-matrix-e9", "ssh": {"host": "91.224.44.227", "port": 40060, "user": "root"}, "gpu_type": "RTX4090", "gpu_count": 1, "compose": "docker/compose.miner.yml", "hotkey": {"name": "locus_miner_sn3_5", "ss58": "5EK2LzXbVZPbSK7zjgLFAgCWKfH62uHZn2nuZ5r5q9mUpkbS"}},
-    {"slot": 7, "pod_id": "a5692b27-df2d-43d7-80fa-f99a6ca1787a", "huid": "gentle-eagle-fb", "ssh": {"host": "188.27.248.152", "port": 45100, "user": "root"}, "gpu_type": "Edition", "gpu_count": 1, "compose": "docker/compose.miner.yml", "hotkey": {"name": "locus_miner_sn3_7", "ss58": "5FqFPCGbuQWWT1mLH6fGQkysmtZYXUfFtLZ7jykS1yFC8npd"}}
+    {"slot": 1, "pod_id": "444277c6-f845-44e5-bf60-56a92a23cadf", "huid": "brave-fox-76", "ssh": {"host": "216.81.248.222", "port": 46980, "user": "root"}, "gpu_type": "A6000", "gpu_count": 1, "compose": "docker/compose.miner.yml", "hotkey": {"name": "teuton_miner_sn3_1", "ss58": "5EsaSvMVXmY4ovWia7PsUHhZKi7eeqVkoZwcCBBr9Qzo8gM8"}},
+    {"slot": 2, "pod_id": "3b9a3f43-41b8-4bb6-891b-efab58657d2e", "huid": "swift-eagle-d2", "ssh": {"host": "216.81.248.218", "port": 20299, "user": "root"}, "gpu_type": "A6000", "gpu_count": 1, "compose": "docker/compose.miner.yml", "hotkey": {"name": "teuton_miner_sn3_2", "ss58": "5FeYFXovNw37vf4gUZArD5rUzda8Haj1njhLf8TP6bc1ZDL1"}},
+    {"slot": 3, "pod_id": "c0c9d1c0-1837-4b9d-9239-d3f2f3d1e7d9", "huid": "golden-hawk-f9", "ssh": {"host": "91.224.44.226", "port": 20815, "user": "root"}, "gpu_type": "RTX3090", "gpu_count": 1, "compose": "docker/compose.miner.yml", "hotkey": {"name": "teuton_miner_sn3_3", "ss58": "5FPKkvBKyuhhXKnYHmRRupYeWoJJHQ5CSkv7atAfFj8UfUYp"}},
+    {"slot": 4, "pod_id": "0c47f133-fa7c-47b7-bcec-7cfa872da72c", "huid": "golden-orbit-b1", "ssh": {"host": "91.224.44.226", "port": 20609, "user": "root"}, "gpu_type": "RTX3090", "gpu_count": 1, "compose": "docker/compose.miner.yml", "hotkey": {"name": "teuton_miner_sn3_4", "ss58": "5E2UjCLGwCsnV1gZPZvQSkr1i91JNtReLXWKojCb9SVBtXAP"}},
+    {"slot": 5, "pod_id": "1d7f37fa-9c7b-4e22-bbf8-6217262f274a", "huid": "cosmic-matrix-e9", "ssh": {"host": "91.224.44.227", "port": 40060, "user": "root"}, "gpu_type": "RTX4090", "gpu_count": 1, "compose": "docker/compose.miner.yml", "hotkey": {"name": "teuton_miner_sn3_5", "ss58": "5EK2LzXbVZPbSK7zjgLFAgCWKfH62uHZn2nuZ5r5q9mUpkbS"}},
+    {"slot": 7, "pod_id": "a5692b27-df2d-43d7-80fa-f99a6ca1787a", "huid": "gentle-eagle-fb", "ssh": {"host": "188.27.248.152", "port": 45100, "user": "root"}, "gpu_type": "Edition", "gpu_count": 1, "compose": "docker/compose.miner.yml", "hotkey": {"name": "teuton_miner_sn3_7", "ss58": "5FqFPCGbuQWWT1mLH6fGQkysmtZYXUfFtLZ7jykS1yFC8npd"}}
   ],
   "multi_miner": [
     {
@@ -38,10 +38,10 @@
       "gpu_count": 8,
       "compose": "docker/compose.multi-miner.yml",
       "hotkeys": [
-        {"gpu_index": 0, "name": "locus_miner_sn3_8", "ss58": "5Hf3WqjW9XW6C7ZvWyKcdFfDXidBr9qk6iKU6YAAHjgJduna"},
-        {"gpu_index": 1, "name": "locus_miner_sn3_9", "ss58": "5Fmqz41Eap1T2yuYsRoEf4jeFLieMFPmBrTEpgyVmDCoxHSZ"},
-        {"gpu_index": 2, "name": "locus_miner_sn3_10", "ss58": "5GTJh7x7Fo2TBHYdfec22N1ZwKc6b4X78dpqn7Y1aGWt8oo6"},
-        {"gpu_index": 3, "name": "locus_miner_sn3_6", "ss58": "5G9GP5Um8AFKt3baohXsPtMb71HtnJoKskeLmwSzBgGDvwwy"}
+        {"gpu_index": 0, "name": "teuton_miner_sn3_8", "ss58": "5Hf3WqjW9XW6C7ZvWyKcdFfDXidBr9qk6iKU6YAAHjgJduna"},
+        {"gpu_index": 1, "name": "teuton_miner_sn3_9", "ss58": "5Fmqz41Eap1T2yuYsRoEf4jeFLieMFPmBrTEpgyVmDCoxHSZ"},
+        {"gpu_index": 2, "name": "teuton_miner_sn3_10", "ss58": "5GTJh7x7Fo2TBHYdfec22N1ZwKc6b4X78dpqn7Y1aGWt8oo6"},
+        {"gpu_index": 3, "name": "teuton_miner_sn3_6", "ss58": "5G9GP5Um8AFKt3baohXsPtMb71HtnJoKskeLmwSzBgGDvwwy"}
       ]
     }
   ],

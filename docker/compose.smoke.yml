@@ -1,28 +1,28 @@
 # Phase 1.5 smoke test: verify Watchtower auto-update.
 #
-# Starts a tiny container using locus:miner that prints its image SHA + build
+# Starts a tiny container using teuton:miner that prints its image SHA + build
 # stamp every 30s, alongside Watchtower (label-enabled, 60s poll). Then we
 # rebuild + push :miner (no other tags) and within ~60s the smoke container
 # should restart with the new image.
 #
 # Used by scripts/watchtower_smoke.sh. Not deployed to remotes.
-name: locus-smoke
+name: teuton-smoke
 
 services:
   smoke:
-    image: ${DOCKER_USER}/locus:miner
-    container_name: locus-smoke
+    image: ${DOCKER_USER}/teuton:miner
+    container_name: teuton-smoke
     restart: always
     pull_policy: always
     environment:
-      LOCUS_ROLE: shell
+      TEUTON_ROLE: shell
     entrypoint:
       - /bin/bash
       - -c
       - |
-        echo "[smoke] started $(date -u +%FT%TZ) git=${LOCUS_GIT_SHA:-?} build=${LOCUS_BUILD_TIME:-?}"
+        echo "[smoke] started $(date -u +%FT%TZ) git=${TEUTON_GIT_SHA:-?} build=${TEUTON_BUILD_TIME:-?}"
         while true; do
-          echo "[smoke] alive $(date -u +%FT%TZ) git=${LOCUS_GIT_SHA:-?}"
+          echo "[smoke] alive $(date -u +%FT%TZ) git=${TEUTON_GIT_SHA:-?}"
           sleep 30
         done
     labels:
@@ -30,7 +30,7 @@ services:
 
   watchtower:
     image: containrrr/watchtower:latest
-    container_name: locus-smoke-watchtower
+    container_name: teuton-smoke-watchtower
     restart: always
     environment:
       WATCHTOWER_LABEL_ENABLE: "true"

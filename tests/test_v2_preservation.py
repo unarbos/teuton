@@ -4,9 +4,9 @@ import json
 
 import torch
 
-from locus_core.ir import Graph, GraphBuilder, ref_param
-from locus_runtime import tensor_io
-from locus_runtime.eval import evaluate
+from teuton_core.ir import Graph, GraphBuilder, ref_param
+from teuton_runtime import tensor_io
+from teuton_runtime.eval import evaluate
 
 
 def test_tensor_io_v2_dtype_round_trips() -> None:
@@ -40,10 +40,10 @@ def test_v2_ir_hash_and_param_seed_semantics() -> None:
 
 
 def test_legacy_v2_task_catalog_imports() -> None:
-    import locus_legacy_v2.tasks.adam_mlp as adam_mlp
-    import locus_legacy_v2.tasks.gpt_pipe as gpt_pipe
-    import locus_tasks.adam_mlp as public_adam_mlp
-    import locus_tasks.gpt_pipe as public_gpt_pipe
+    import teuton_legacy_v2.tasks.adam_mlp as adam_mlp
+    import teuton_legacy_v2.tasks.gpt_pipe as gpt_pipe
+    import teuton_tasks.adam_mlp as public_adam_mlp
+    import teuton_tasks.gpt_pipe as public_gpt_pipe
 
     assert adam_mlp.build_forward_graph().graph_id()
     assert public_adam_mlp.build_forward_graph().graph_id() == adam_mlp.build_forward_graph().graph_id()

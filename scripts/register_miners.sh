@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 # Register N ed25519 miner hotkeys on netuid 3 finney under coldkey
-# `locus_mining`. Idempotent: skips any hotkey whose SS58 is already in the
+# `teuton_mining`. Idempotent: skips any hotkey whose SS58 is already in the
 # netuid 3 metagraph.
 #
 # Usage:
 #   ./scripts/register_miners.sh                      # default: 10 miners
 #   ./scripts/register_miners.sh --n 5                # only 5
-#   ./scripts/register_miners.sh --prefix locus_miner_sn3_ --start 1 --n 10
+#   ./scripts/register_miners.sh --prefix teuton_miner_sn3_ --start 1 --n 10
 #
 # Requires:
 #   - bittensor + bittensor-wallet installed (already in .venv via uv)
 #   - btcli on PATH
-#   - locus_mining coldkey unlocked or password supplied via env
+#   - teuton_mining coldkey unlocked or password supplied via env
 #
 # Cost (burn): printed before any extrinsic; explicit "yes" prompt required.
 set -euo pipefail
@@ -21,8 +21,8 @@ cd "$REPO_ROOT"
 
 NETUID=${NETUID:-3}
 NETWORK=${NETWORK:-finney}
-WALLET=${WALLET:-locus_mining}
-PREFIX="locus_miner_sn3_"
+WALLET=${WALLET:-teuton_mining}
+PREFIX="teuton_miner_sn3_"
 START=1
 N=10
 DRY_RUN=0
@@ -99,11 +99,11 @@ for name, ss58, on_chain in rows:
     print(f"  {name:32s} {ss58}  {mark}")
 # Save remaining for later steps
 remaining = [(name, ss58) for name, ss58, on_chain in rows if not on_chain]
-Path("/tmp/locus_miner_register_queue.json").write_text(json.dumps(remaining))
+Path("/tmp/teuton_miner_register_queue.json").write_text(json.dumps(remaining))
 print(f"\n{len(remaining)} hotkeys queued for registration")
 PY
 
-QUEUE_LEN=$(python -c 'import json; print(len(json.load(open("/tmp/locus_miner_register_queue.json"))))')
+QUEUE_LEN=$(python -c 'import json; print(len(json.load(open("/tmp/teuton_miner_register_queue.json"))))')
 if [ "$QUEUE_LEN" -eq 0 ]; then
     echo "All target hotkeys already registered."
     exit 0
@@ -137,22 +137,22 @@ if [ "$ASSUME_YES" -ne 1 ]; then
 fi
 
 # 4. Register each queued hotkey via the Python bittensor API. We need the
-#    coldkey password; the script reads it from $LOCUS_MINING_COLDKEY_PW and
+#    coldkey password; the script reads it from $TEUTON_MINING_COLDKEY_PW and
 #    hands it to bittensor-wallet via the Rust-side `save_password_to_env`
 #    (which is what the official examples use).
-if [ -z "${LOCUS_MINING_COLDKEY_PW:-}" ]; then
-    echo "error: LOCUS_MINING_COLDKEY_PW must be set (the locus_mining coldkey password)." >&2
-    echo "       e.g.  LOCUS_MINING_COLDKEY_PW='...' bash scripts/register_miners.sh --yes" >&2
+if [ -z "${TEUTON_MINING_COLDKEY_PW:-}" ]; then
+    echo "error: TEUTON_MINING_COLDKEY_PW must be set (the teuton_mining coldkey password)." >&2
+    echo "       e.g.  TEUTON_MINING_COLDKEY_PW='...' bash scripts/register_miners.sh --yes" >&2
     exit 3
 fi
 
-LOCUS_MINING_COLDKEY_PW="$LOCUS_MINING_COLDKEY_PW" python - <<PY
+TEUTON_MINING_COLDKEY_PW="$TEUTON_MINING_COLDKEY_PW" python - <<PY
 import json, os, time
 import bittensor as bt
 import bittensor_wallet
 
-pw = os.environ["LOCUS_MINING_COLDKEY_PW"]
-queue = json.load(open("/tmp/locus_miner_register_queue.json"))
+pw = os.environ["TEUTON_MINING_COLDKEY_PW"]
+queue = json.load(open("/tmp/teuton_miner_register_queue.json"))
 st = bt.Subtensor(network="${NETWORK}")
 
 # Sanity-check the password against the coldkey before spending anything.
@@ -222,7 +222,7 @@ import bittensor as bt
 st = bt.Subtensor(network="${NETWORK}")
 mg = st.metagraph(${NETUID})
 hotkeys = set(mg.hotkeys)
-queue = json.load(open("/tmp/locus_miner_register_queue.json"))
+queue = json.load(open("/tmp/teuton_miner_register_queue.json"))
 ok, missing = [], []
 for name, ss58 in queue:
     if ss58 in hotkeys:

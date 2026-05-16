@@ -1,10 +1,10 @@
-"""Session-safe Lium fleet helper for Locus v3.
+"""Session-safe Lium fleet helper for Teuton v3.
 
 No credentials are embedded. Set LIUM_API_KEY via Doppler or the environment.
 Only pods recorded in SESSION_FILE may be terminated by this script.
 
 All `rent` flows default to the verified daturaai/dind template so the rented
-pod boots with a working Docker daemon, allowing the Locus role containers and
+pod boots with a working Docker daemon, allowing the Teuton role containers and
 Watchtower to run inside it.
 """
 from __future__ import annotations
@@ -15,15 +15,15 @@ import os
 import time
 from pathlib import Path
 
-SESSION_FILE = Path(os.environ.get("LOCUS_V3_LIUM_SESSION", "/tmp/locus_v3_lium_session.json"))
+SESSION_FILE = Path(os.environ.get("TEUTON_V3_LIUM_SESSION", "/tmp/teuton_v3_lium_session.json"))
 
 # Pre-verified Lium template that ships docker-in-docker (DinD). Each rented
-# pod boots its own dockerd, so we can `docker compose up -d` our locus images
+# pod boots its own dockerd, so we can `docker compose up -d` our teuton images
 # + Watchtower inside.
 DEFAULT_TEMPLATE_ID = os.environ.get(
-    "LOCUS_LIUM_TEMPLATE_ID", "f6f54e1a-88aa-4868-906f-7a8c874e05f9"
+    "TEUTON_LIUM_TEMPLATE_ID", "f6f54e1a-88aa-4868-906f-7a8c874e05f9"
 )
-DEFAULT_TEMPLATE_IMAGE = os.environ.get("LOCUS_LIUM_TEMPLATE_IMAGE", "daturaai/dind")
+DEFAULT_TEMPLATE_IMAGE = os.environ.get("TEUTON_LIUM_TEMPLATE_IMAGE", "daturaai/dind")
 
 
 def client():
@@ -83,7 +83,7 @@ def cmd_rent(args) -> int:
     for e in candidates[: args.n]:
         res = c.up(
             executor_id=e.id,
-            name=f"locus-v3-{e.huid[:12]}",
+            name=f"teuton-v3-{e.huid[:12]}",
             template_id=template_id,
         )
         pod_id = res.get("id") or (res.get("pod") or {}).get("id")
@@ -159,7 +159,7 @@ def cmd_write_hosts(args) -> int:
     c = client()
     wanted = {r["pod_id"] for r in load_session().get("rented", []) if r.get("pod_id")}
     pods = [p for p in c.ps() if p.id in wanted]
-    lines = ["# Locus v3 session-only Lium hosts", "# tag user host port n_workers gpu_class price_per_hour"]
+    lines = ["# Teuton v3 session-only Lium hosts", "# tag user host port n_workers gpu_class price_per_hour"]
     for i, pod in enumerate(sorted(pods, key=lambda p: p.huid)):
         parts = (pod.ssh_cmd or "").split()
         host = parts[1].split("@")[-1] if len(parts) > 1 else "?"

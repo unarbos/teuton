@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from locus_core.cli import main
+from teuton_core.cli import main
 
 
 def test_local_smoke_cli_outputs_scores(tmp_path, capsys) -> None:

@@ -61,17 +61,17 @@ _sync_one() {
   echo "[sync $tag ${gpuclass}x${nwork}] -> $user@$host:$port"
   # Step 1: ensure rsync is installed remotely (some daturaai boxes lack it).
   SSH -p "$port" "$user@$host" "command -v rsync >/dev/null || (apt-get update -qq && apt-get install -y -qq rsync)" >/dev/null 2>&1 || true
-  SSH -p "$port" "$user@$host" "mkdir -p /root/Locus" >/dev/null 2>&1 || true
+  SSH -p "$port" "$user@$host" "mkdir -p /root/Teuton" >/dev/null 2>&1 || true
   # Step 2: rsync source.
   rsync -az --delete \
     --exclude '__pycache__' --exclude '.venv' --exclude '*.egg-info' \
     --exclude '.pytest_cache' \
     -e "ssh ${SSH_OPTS[*]} -p $port" \
-    /Users/const/Locus/Locus/ "$user@$host:/root/Locus/" >/dev/null 2>&1 || { echo "  ! rsync failed for $tag, falling back to scp"; SCP -P "$port" -r /Users/const/Locus/Locus/locus /Users/const/Locus/Locus/bench /Users/const/Locus/Locus/pyproject.toml "$user@$host:/root/Locus/" >/dev/null 2>&1; }
+    /Users/const/Teuton/Teuton/ "$user@$host:/root/Teuton/" >/dev/null 2>&1 || { echo "  ! rsync failed for $tag, falling back to scp"; SCP -P "$port" -r /Users/const/Teuton/Teuton/teuton /Users/const/Teuton/Teuton/bench /Users/const/Teuton/Teuton/pyproject.toml "$user@$host:/root/Teuton/" >/dev/null 2>&1; }
   # Step 3: copy .env.
-  SCP -P "$port" /Users/const/Locus/.env "$user@$host:/root/.env" >/dev/null 2>&1 || echo "  ! .env copy failed"
+  SCP -P "$port" /Users/const/Teuton/.env "$user@$host:/root/.env" >/dev/null 2>&1 || echo "  ! .env copy failed"
   # Step 4: run setup + install package.
-  SSH -p "$port" "$user@$host" "bash /root/Locus/bench/setup_fleet.sh 2>&1 | tail -5 && cd /root/Locus && pip install --quiet --break-system-packages -e . 2>&1 | tail -1 || pip install --quiet -e . 2>&1 | tail -1" 2>&1 | tail -3
+  SSH -p "$port" "$user@$host" "bash /root/Teuton/bench/setup_fleet.sh 2>&1 | tail -5 && cd /root/Teuton && pip install --quiet --break-system-packages -e . 2>&1 | tail -1 || pip install --quiet -e . 2>&1 | tail -1" 2>&1 | tail -3
 }
 
 cmd_sync() { _load_boxes; _for_each_box _sync_one; echo "[sync] all ${#BOXES[@]} boxes synced"; }
@@ -84,7 +84,7 @@ _status_one() {
     "ps aux | awk '/bench\\.dist worker/ && !/awk/' | wc -l; \
      ps aux | awk '/bench\\.dist (orchestrator|streaming-orchestrator)/ && !/awk/' | wc -l; \
      ps aux | awk '/bench\\.dist validator/ && !/awk/' | wc -l; \
-     ls /tmp/locus_logs/${tag}-w*.log 2>/dev/null | wc -l" 2>&1 || echo "0\n0\n0\n0")
+     ls /tmp/teuton_logs/${tag}-w*.log 2>/dev/null | wc -l" 2>&1 || echo "0\n0\n0\n0")
   awk -v tag="$tag" -v expect="$nwork" -v gpu="$gpuclass" \
     'BEGIN{nw=0;no=0;nv=0;nl=0} NR==1{nw=$1} NR==2{no=$1} NR==3{nv=$1} NR==4{nl=$1} \
      END{printf "%-3s %-10s expect=%d alive_workers=%d alive_orch=%d alive_validator=%d log_files=%d\n", \
@@ -100,7 +100,7 @@ cmd_bootstrap() {
   _load_boxes
   read -r u h p <<< "$(_master)"
   SSH -p "$p" "$u@$h" \
-    "cd /root/Locus && python3 -m bench.dist bootstrap --task $task --run-id $run --max-rounds $rounds"
+    "cd /root/Teuton && python3 -m bench.dist bootstrap --task $task --run-id $run --max-rounds $rounds"
 }
 
 # Start workers on a single box (used by both sync-round and streaming).
@@ -120,13 +120,13 @@ _start_workers_one() {
 #!/usr/bin/env bash
 set -e
 TAG=$1; RUN=$2; NUB=$3; DEVICE=$4; GPUCLASS=$5; BASE_IDX=$6; N=$7; MODE=$8; WPOLL=$9; HB=${10}; FAULT_MODE=${11}; FAULT_RATE=${12}
-mkdir -p /tmp/locus_logs
-rm -f /tmp/locus_logs/${TAG}-w*.log
+mkdir -p /tmp/teuton_logs
+rm -f /tmp/teuton_logs/${TAG}-w*.log
 for i in $(seq 0 $((N-1))); do
     GLOBAL_IDX=$((BASE_IDX + i))
     SLOT=$((GLOBAL_IDX % NUB))
     WID="${TAG}-w${i}"
-    LOG="/tmp/locus_logs/${WID}.log"
+    LOG="/tmp/teuton_logs/${WID}.log"
     if [ "$DEVICE" = "cuda" ]; then
         DEV_ARG="cuda:${i}"
     else
@@ -157,7 +157,7 @@ sleep 1
 echo "$TAG: $(pgrep -fa 'bench.dist worker' | wc -l) workers (base_idx=$BASE_IDX, n=$NUB, dev=$DEVICE, mode=$MODE, poll=$WPOLL, fault=${FAULT_MODE:-none})"
 EOF
   SSH -p "$port" "$user@$host" \
-    "cd /root/Locus && bash /root/start_local.sh $tag $run $nub_or_nstages $device $gpuclass $base_idx $nwork $mode $wpoll $hb '$fault_mode' '$fault_rate'"
+    "cd /root/Teuton && bash /root/start_local.sh $tag $run $nub_or_nstages $device $gpuclass $base_idx $nwork $mode $wpoll $hb '$fault_mode' '$fault_rate'"
 }
 
 _start_orch() {
@@ -175,9 +175,9 @@ _start_orch() {
 #!/usr/bin/env bash
 set -e
 TASK=\$1; RUN=\$2; GRACE=\$3; POLL=\$4
-cd /root/Locus
-rm -f /tmp/locus-orch.log
-setsid bash -c "python3 -u -m bench.dist $SUBCMD --task \$TASK --run-id \$RUN --poll-interval \$POLL --startup-grace-sec \$GRACE >/tmp/locus-orch.log 2>&1 </dev/null" >/dev/null 2>&1 </dev/null &
+cd /root/Teuton
+rm -f /tmp/teuton-orch.log
+setsid bash -c "python3 -u -m bench.dist $SUBCMD --task \$TASK --run-id \$RUN --poll-interval \$POLL --startup-grace-sec \$GRACE >/tmp/teuton-orch.log 2>&1 </dev/null" >/dev/null 2>&1 </dev/null &
 disown \$! 2>/dev/null || true
 sleep 1
 pgrep -fa "bench.dist" | head -2
@@ -220,7 +220,7 @@ cmd_tail() {
   _load_boxes
   read -r u h p <<< "$(_master)"
   SSH -p "$p" "$u@$h" \
-    "cd /root/Locus && python3 -m bench.dist tail --run-id $run --max-rounds $rounds --poll-interval 2.0 --timeout-sec 3600.0"
+    "cd /root/Teuton && python3 -m bench.dist tail --run-id $run --max-rounds $rounds --poll-interval 2.0 --timeout-sec 3600.0"
 }
 
 cmd_start_validator() {
@@ -239,9 +239,9 @@ cmd_start_validator() {
 #!/usr/bin/env bash
 set -e
 RUN=\$1; VID=\$2; DEVICE=\$3; SAMPLE=\$4; POLL=\$5
-cd /root/Locus
-rm -f /tmp/locus-validator.log
-setsid bash -c "python3 -u -m bench.dist validator --run-id \$RUN --validator-id \$VID --device \$DEVICE --sample-rate \$SAMPLE --poll-interval \$POLL $extra >/tmp/locus-validator.log 2>&1 </dev/null" >/dev/null 2>&1 </dev/null &
+cd /root/Teuton
+rm -f /tmp/teuton-validator.log
+setsid bash -c "python3 -u -m bench.dist validator --run-id \$RUN --validator-id \$VID --device \$DEVICE --sample-rate \$SAMPLE --poll-interval \$POLL $extra >/tmp/teuton-validator.log 2>&1 </dev/null" >/dev/null 2>&1 </dev/null &
 disown \$! 2>/dev/null || true
 sleep 1
 pgrep -fa "bench.dist validator" || true
@@ -252,7 +252,7 @@ EOF
 cmd_tail_validator() {
   _load_boxes
   read -r u h p <<< "$(_master)"
-  SSH -p "$p" "$u@$h" "tail -f /tmp/locus-validator.log"
+  SSH -p "$p" "$u@$h" "tail -f /tmp/teuton-validator.log"
 }
 
 cmd_ledger() {
@@ -260,7 +260,7 @@ cmd_ledger() {
   _load_boxes
   read -r u h p <<< "$(_master)"
   SSH -p "$p" "$u@$h" \
-    "cd /root/Locus && python3 -m bench.dist ledger --run-id $run"
+    "cd /root/Teuton && python3 -m bench.dist ledger --run-id $run"
 }
 
 _stop_one() {
@@ -278,7 +278,7 @@ cmd_wipe() {
   _load_boxes
   read -r u h p <<< "$(_master)"
   SSH -p "$p" "$u@$h" \
-    "cd /root/Locus && python3 -m bench.dist wipe --run-id $run"
+    "cd /root/Teuton && python3 -m bench.dist wipe --run-id $run"
 }
 
 case "${1:-}" in

@@ -27,7 +27,7 @@ Metrics emitted to JSON:
 Usage:
     python bench/sparseloco_moe_validation.py run \
         --condition sparseloco --moe on \
-        --tokens /workspace/locus_data/tokens.bin \
+        --tokens /workspace/teuton_data/tokens.bin \
         --device cuda:0 --out /workspace/sl_sparseloco_moe.json
 
 The "ddp" condition uses 1 model on a (R*B, T) batch — mathematically
@@ -240,10 +240,10 @@ class GPT(nn.Module):
 
 def load_tokens(path: str) -> torch.Tensor:
     body = Path(path).read_bytes()
-    # Try Locus tensor_io first; else raw int32/uint16 fallback
+    # Try Teuton tensor_io first; else raw int32/uint16 fallback
     try:
-        sys.path.insert(0, "/root/Locus")
-        from locus import tensor_io
+        sys.path.insert(0, "/root/Teuton")
+        from teuton import tensor_io
         return tensor_io.decode_tensor(body).to(torch.long)
     except Exception:
         try:

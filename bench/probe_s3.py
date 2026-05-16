@@ -16,12 +16,12 @@ from pathlib import Path
 def main() -> int:
     from dotenv import load_dotenv
 
-    for p in [Path("/root/.env"), Path("/root/Locus/.env"), Path("/root/Locus/.env")]:
+    for p in [Path("/root/.env"), Path("/root/Teuton/.env"), Path("/root/Teuton/.env")]:
         if p.exists():
             load_dotenv(p, override=True)
             break
 
-    from locus_legacy_v2.storage import S3Bucket
+    from teuton_legacy_v2.storage import S3Bucket
 
     bucket_name = os.environ["S3_BUCKET"]
     region = os.environ.get("S3_REGION", "us-east-1")

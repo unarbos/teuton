@@ -1,5 +1,5 @@
 """Remove the `RUN_ID=...` line from each non-protected remote pod's
-/root/locus/.env so the image-baked LOCUS_BAKED_RUN_ID wins when Watchtower
+/root/teuton/.env so the image-baked TEUTON_BAKED_RUN_ID wins when Watchtower
 recreates the container after a fresh `scripts/build_push.sh --run-id ...`.
 
 Reads bench/fleet.json for ssh endpoints, respects scripts/lium_protected.
@@ -42,7 +42,7 @@ def strip(huid: str, ssh: dict) -> tuple[str, int, str]:
         "-p", str(ssh["port"]),
         f"{ssh['user']}@{ssh['host']}",
         # idempotent: remove any RUN_ID= line; harmless if already absent.
-        "test -f /root/locus/.env && sed -i '/^RUN_ID=/d' /root/locus/.env && "
+        "test -f /root/teuton/.env && sed -i '/^RUN_ID=/d' /root/teuton/.env && "
         "echo 'stripped' || echo 'no .env'",
     ]
     p = subprocess.run(cmd, capture_output=True, text=True, timeout=30)

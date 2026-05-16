@@ -1,1 +1,1 @@
-"""Command-line helper scripts for Locus."""
+"""Command-line helper scripts for Teuton."""

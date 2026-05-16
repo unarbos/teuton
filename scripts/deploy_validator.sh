@@ -3,9 +3,9 @@
 # audit-jobs-loop + watchtower, with the teutonic wallet bind-mounted ro.
 #
 # Sources:
-#   - LOCUS_*, AWS_*, S3_* from /home/const/locus/.env
+#   - TEUTON_*, AWS_*, S3_* from /home/const/teuton/.env
 #   - DOCKER_USER, DOCKER_PAT from Doppler arbos/dev
-#   - RUN_ID from /tmp/locus_sn3_run_id (or env)
+#   - RUN_ID from /tmp/teuton_sn3_run_id (or env)
 #
 # Usage:
 #   ./scripts/deploy_validator.sh [up|down|logs|ps]
@@ -20,13 +20,13 @@ set -a
 source .env
 set +a
 
-export RUN_ID="${RUN_ID:-$(cat /tmp/locus_sn3_run_id 2>/dev/null)}"
+export RUN_ID="${RUN_ID:-$(cat /tmp/teuton_sn3_run_id 2>/dev/null)}"
 if [ -z "$RUN_ID" ]; then
-    echo "RUN_ID is empty; set it or write /tmp/locus_sn3_run_id" >&2
+    echo "RUN_ID is empty; set it or write /tmp/teuton_sn3_run_id" >&2
     exit 2
 fi
 
-export LOCUS_NETUID="${LOCUS_NETUID:-3}"
+export TEUTON_NETUID="${TEUTON_NETUID:-3}"
 export VALIDATOR_WALLET_NAME="${VALIDATOR_WALLET_NAME:-teutonic}"
 export VALIDATOR_HOTKEY_NAME="${VALIDATOR_HOTKEY_NAME:-default}"
 export VALIDATOR_HOTKEY_SS58="${VALIDATOR_HOTKEY_SS58:-5E6yHkmZmSpBT5aa2rNZcmeYa1y3N9jw1h7g53oNPzMUpnqG}"
@@ -34,11 +34,11 @@ export AUDIT_MODE="${AUDIT_MODE:-consume}"
 export AUDIT_SAMPLE_RATE="${AUDIT_SAMPLE_RATE:-0.2}"
 export AUDIT_MAX_JOBS="${AUDIT_MAX_JOBS:-50}"
 export AUDIT_JOBS_SLEEP_SEC="${AUDIT_JOBS_SLEEP_SEC:-15}"
-export LOCUS_LOOP_SLEEP_SEC="${LOCUS_LOOP_SLEEP_SEC:-30}"
+export TEUTON_LOOP_SLEEP_SEC="${TEUTON_LOOP_SLEEP_SEC:-30}"
 export ORCHESTRATOR_STEPS="${ORCHESTRATOR_STEPS:-1000000}"
 export ORCHESTRATOR_TIMEOUT_SEC="${ORCHESTRATOR_TIMEOUT_SEC:-31536000}"
 
-echo "RUN_ID=$RUN_ID  netuid=$LOCUS_NETUID  validator=$VALIDATOR_WALLET_NAME/$VALIDATOR_HOTKEY_NAME ($VALIDATOR_HOTKEY_SS58)"
+echo "RUN_ID=$RUN_ID  netuid=$TEUTON_NETUID  validator=$VALIDATOR_WALLET_NAME/$VALIDATOR_HOTKEY_NAME ($VALIDATOR_HOTKEY_SS58)"
 
 doppler run --project arbos --config dev -- bash -lc '
     set -euo pipefail
@@ -48,12 +48,12 @@ doppler run --project arbos --config dev -- bash -lc '
 
     export DOCKER_USER S3_BUCKET S3_REGION S3_ENDPOINT_URL \
            AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY \
-           LOCUS_OWNER_SECRET LOCUS_MINER_SECRET LOCUS_VALIDATOR_SECRET \
-           LOCUS_ASSIGNMENT_SECRET LOCUS_ASSIGNMENT_CRYPTO \
-           LOCUS_NETUID RUN_ID \
+           TEUTON_OWNER_SECRET TEUTON_MINER_SECRET TEUTON_VALIDATOR_SECRET \
+           TEUTON_ASSIGNMENT_SECRET TEUTON_ASSIGNMENT_CRYPTO \
+           TEUTON_NETUID RUN_ID \
            VALIDATOR_WALLET_NAME VALIDATOR_HOTKEY_NAME VALIDATOR_HOTKEY_SS58 \
            AUDIT_MODE AUDIT_SAMPLE_RATE AUDIT_MAX_JOBS AUDIT_JOBS_SLEEP_SEC \
-           LOCUS_LOOP_SLEEP_SEC ORCHESTRATOR_STEPS ORCHESTRATOR_TIMEOUT_SEC
+           TEUTON_LOOP_SLEEP_SEC ORCHESTRATOR_STEPS ORCHESTRATOR_TIMEOUT_SEC
 
     case "'"$ACTION"'" in
         up)    docker compose -f docker/compose.validator.yml pull

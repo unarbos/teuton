@@ -1,6 +1,6 @@
 # Fleet Operations Notes
 
-V2 fleet tooling has been curated into `locus_v3/bench`. The maintained path is:
+V2 fleet tooling has been curated into `teuton_v3/bench`. The maintained path is:
 
 - `bench/lium_fleet.py` for session-safe Lium rental management. It requires `LIUM_API_KEY` from Doppler or the environment and embeds no key.
 - `bench/legacy_dist.py` for running the preserved v2-style runtime against an S3 bucket while comparing behavior during migration.

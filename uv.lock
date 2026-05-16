@@ -1406,7 +1406,7 @@ wheels = [
 ]
 
 [[package]]
-name = "locus-v3"
+name = "teuton-v3"
 version = "0.3.0"
 source = { editable = "." }
 dependencies = [

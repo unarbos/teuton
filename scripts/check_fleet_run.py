@@ -1,7 +1,7 @@
 """Poll every non-protected fleet pod and report which RUN_ID it is on now.
 
 For each host:
-  - reads `LOCUS_BAKED_RUN_ID` (from `docker inspect` of the running container)
+  - reads `TEUTON_BAKED_RUN_ID` (from `docker inspect` of the running container)
   - greps `run_id` from the most recent banner in `docker logs`
 
 Run repeatedly to watch a roll-out finish.
@@ -22,11 +22,11 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 FLEET = json.loads((REPO_ROOT / "bench" / "fleet.json").read_text())
 
 CONTAINER_HINTS = {
-    "miner": ["locus-miner"],
+    "miner": ["teuton-miner"],
     "multi-miner": [
-        "locus-miner-gpu0", "locus-miner-gpu1", "locus-miner-gpu2", "locus-miner-gpu3"
+        "teuton-miner-gpu0", "teuton-miner-gpu1", "teuton-miner-gpu2", "teuton-miner-gpu3"
     ],
-    "auditor": ["locus-auditor-gpu0"],
+    "auditor": ["teuton-auditor-gpu0"],
 }
 
 
@@ -75,11 +75,11 @@ def probe(huid: str, role: str, ssh: dict) -> dict:
     env_block, _, logs = env_block_logs.partition("---LOGS---")
     baked = ""
     for line in env_block.splitlines():
-        if line.startswith("LOCUS_BAKED_RUN_ID="):
+        if line.startswith("TEUTON_BAKED_RUN_ID="):
             baked = line.split("=", 1)[1].strip()
-        if line.startswith("LOCUS_RUN_ID="):
-            info["env_LOCUS_RUN_ID"] = line.split("=", 1)[1].strip()
-    info["env_LOCUS_BAKED_RUN_ID"] = baked
+        if line.startswith("TEUTON_RUN_ID="):
+            info["env_TEUTON_RUN_ID"] = line.split("=", 1)[1].strip()
+    info["env_TEUTON_BAKED_RUN_ID"] = baked
     m = re.search(r"run_id\s*:\s*(\S+)", logs)
     info["banner_run_id"] = m.group(1) if m else ""
     return info
@@ -90,20 +90,20 @@ def fmt(info: dict, expected: str) -> str:
         return f"  {info['huid']:22s} PROTECTED"
     if "error" in info:
         return f"  {info['huid']:22s} ERROR  {info['error'][:80]}"
-    banner = info.get("banner_run_id") or info.get("env_LOCUS_RUN_ID") or info.get("env_LOCUS_BAKED_RUN_ID") or "?"
+    banner = info.get("banner_run_id") or info.get("env_TEUTON_RUN_ID") or info.get("env_TEUTON_BAKED_RUN_ID") or "?"
     mark = "OK " if banner == expected else "OLD"
     return (
         f"  {info['huid']:22s} {mark}  run_id={banner:30s} "
-        f"baked={info.get('env_LOCUS_BAKED_RUN_ID','')[:30]}"
+        f"baked={info.get('env_TEUTON_BAKED_RUN_ID','')[:30]}"
     )
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--expect", default=None, help="Expected run_id (default: /tmp/locus_sn3_run_id)")
+    ap.add_argument("--expect", default=None, help="Expected run_id (default: /tmp/teuton_sn3_run_id)")
     ap.add_argument("--watch", type=int, default=0, help="Poll every N seconds, until all match --expect (0 = single pass)")
     args = ap.parse_args()
-    expected = args.expect or Path("/tmp/locus_sn3_run_id").read_text().strip()
+    expected = args.expect or Path("/tmp/teuton_sn3_run_id").read_text().strip()
 
     hosts = all_hosts()
     print(f"Expecting run_id = {expected}")

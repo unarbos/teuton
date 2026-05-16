@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# End-to-end deploy of the Locus public dashboard:
+# End-to-end deploy of the Teuton public dashboard:
 #
 #   1. Provision the Cloudflare Tunnel + DNS via setup_cloudflare_dashboard.py
 #      (idempotent; reuses an existing tunnel of the same name).
-#   2. SSH to the chosen host, write /root/locus/.env, scp the compose file,
+#   2. SSH to the chosen host, write /root/teuton/.env, scp the compose file,
 #      docker login, and `docker compose up -d` the dashboard stack.
 #
 # Usage:
@@ -14,14 +14,14 @@
 #
 # Required env (from Doppler arbos/dev or your shell):
 #   CLOUDFLARE_API_TOKEN       (Account: Tunnel Edit, Zone: Read+DNS Edit)
-#   DOCKER_USER, DOCKER_PAT    (so the host can pull the locus image)
+#   DOCKER_USER, DOCKER_PAT    (so the host can pull the teuton image)
 #   S3_BUCKET, S3_REGION, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
-#   LOCUS_NETUID               (default 3)
+#   TEUTON_NETUID               (default 3)
 #
 # Optional:
-#   --tunnel-name NAME    (default: locus-dashboard)
+#   --tunnel-name NAME    (default: teuton-dashboard)
 #   --no-proxy            (grey-cloud DNS instead of orange-cloud)
-#   --skip-cloudflare     (reuse the LOCUS_DASHBOARD_TUNNEL_TOKEN already set)
+#   --skip-cloudflare     (reuse the TEUTON_DASHBOARD_TUNNEL_TOKEN already set)
 #   --skip-host           (only do the Cloudflare setup, print the token)
 set -euo pipefail
 
@@ -31,7 +31,7 @@ cd "$REPO_ROOT"
 HOSTNAME_PUBLIC="dashboard.teutonic.ai"
 SSH_HOST=""
 SSH_PORT="22"
-TUNNEL_NAME="locus-dashboard"
+TUNNEL_NAME="teuton-dashboard"
 NO_PROXY=0
 SKIP_CF=0
 SKIP_HOST=0
@@ -92,8 +92,8 @@ if [ "$SKIP_CF" -ne 1 ]; then
         --token-out "$TUNNEL_TOKEN_FILE" \
         "${NO_PROXY_FLAG[@]}"
 
-    LOCUS_DASHBOARD_TUNNEL_TOKEN=$(tr -d '[:space:]' < "$TUNNEL_TOKEN_FILE")
-    export LOCUS_DASHBOARD_TUNNEL_TOKEN
+    TEUTON_DASHBOARD_TUNNEL_TOKEN=$(tr -d '[:space:]' < "$TUNNEL_TOKEN_FILE")
+    export TEUTON_DASHBOARD_TUNNEL_TOKEN
 fi
 
 if [ "$SKIP_HOST" -eq 1 ]; then
@@ -103,8 +103,8 @@ if [ "$SKIP_HOST" -eq 1 ]; then
     exit 0
 fi
 
-if [ -z "${LOCUS_DASHBOARD_TUNNEL_TOKEN:-}" ]; then
-    echo "error: LOCUS_DASHBOARD_TUNNEL_TOKEN is empty (set it or drop --skip-cloudflare)" >&2
+if [ -z "${TEUTON_DASHBOARD_TUNNEL_TOKEN:-}" ]; then
+    echo "error: TEUTON_DASHBOARD_TUNNEL_TOKEN is empty (set it or drop --skip-cloudflare)" >&2
     exit 1
 fi
 
@@ -131,35 +131,35 @@ push_inline() {
 
 echo
 echo "=== deploying dashboard stack to $SSH_HOST:$SSH_PORT ==="
-remote "mkdir -p /root/locus /root/.docker"
+remote "mkdir -p /root/teuton /root/.docker"
 
 remote "echo '$DOCKER_PAT' | docker login -u '$DOCKER_USER' --password-stdin"
 
-push_inline /root/locus/.env 600 <<EOF
+push_inline /root/teuton/.env 600 <<EOF
 DOCKER_USER=$DOCKER_USER
 S3_BUCKET=$S3_BUCKET
 S3_REGION=${S3_REGION:-us-east-1}
 S3_ENDPOINT_URL=${S3_ENDPOINT_URL:-}
 AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID
 AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY
-LOCUS_NETUID=${LOCUS_NETUID:-3}
-LOCUS_DASHBOARD_TUNNEL_TOKEN=$LOCUS_DASHBOARD_TUNNEL_TOKEN
-LOCUS_DASHBOARD_REFRESH_SEC=${LOCUS_DASHBOARD_REFRESH_SEC:-3.0}
-LOCUS_DASHBOARD_CACHE_SEC=${LOCUS_DASHBOARD_CACHE_SEC:-1.5}
-LOCUS_DASHBOARD_MAX_JOBS=${LOCUS_DASHBOARD_MAX_JOBS:-500}
-LOCUS_DASHBOARD_MAX_ARTIFACTS=${LOCUS_DASHBOARD_MAX_ARTIFACTS:-300}
+TEUTON_NETUID=${TEUTON_NETUID:-3}
+TEUTON_DASHBOARD_TUNNEL_TOKEN=$TEUTON_DASHBOARD_TUNNEL_TOKEN
+TEUTON_DASHBOARD_REFRESH_SEC=${TEUTON_DASHBOARD_REFRESH_SEC:-3.0}
+TEUTON_DASHBOARD_CACHE_SEC=${TEUTON_DASHBOARD_CACHE_SEC:-1.5}
+TEUTON_DASHBOARD_MAX_JOBS=${TEUTON_DASHBOARD_MAX_JOBS:-500}
+TEUTON_DASHBOARD_MAX_ARTIFACTS=${TEUTON_DASHBOARD_MAX_ARTIFACTS:-300}
 EOF
 
 scp "${SCP_OPTS[@]}" \
     "$REPO_ROOT/docker/compose.dashboard.yml" \
-    "$SSH_HOST:/root/locus/compose.yml"
+    "$SSH_HOST:/root/teuton/compose.yml"
 
-remote "cd /root/locus && docker compose pull && docker compose up -d"
-remote "cd /root/locus && docker compose ps --format 'table {{.Service}}\t{{.State}}\t{{.Image}}'"
+remote "cd /root/teuton && docker compose pull && docker compose up -d"
+remote "cd /root/teuton && docker compose ps --format 'table {{.Service}}\t{{.State}}\t{{.Image}}'"
 
 echo
 echo "=================================================================="
 echo "  https://$HOSTNAME_PUBLIC should be live in <60 s."
-echo "  Watch the tunnel:  ssh $SSH_HOST 'docker logs -f locus-dashboard-tunnel'"
-echo "  Watch the UI:      ssh $SSH_HOST 'docker logs -f locus-dashboard-ui'"
+echo "  Watch the tunnel:  ssh $SSH_HOST 'docker logs -f teuton-dashboard-tunnel'"
+echo "  Watch the UI:      ssh $SSH_HOST 'docker logs -f teuton-dashboard-ui'"
 echo "=================================================================="

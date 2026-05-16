@@ -1,1 +1,1 @@
-"""Operational helpers for Locus v3."""
+"""Operational helpers for Teuton v3."""

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from locus_core import paths
-from locus_runtime.lifecycle import wipe_run
+from teuton_core import paths
+from teuton_runtime.lifecycle import wipe_run
 
 
 def test_wipe_run_removes_only_owned_v3_prefixes(local_bucket) -> None:

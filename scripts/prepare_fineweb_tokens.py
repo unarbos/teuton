@@ -24,7 +24,7 @@ from urllib.parse import urlparse
 import boto3
 import torch
 
-from locus_runtime import tensor_io
+from teuton_runtime import tensor_io
 
 
 def make_s3():

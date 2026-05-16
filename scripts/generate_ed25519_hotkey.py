@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate a native Bittensor ED25519 miner hotkey for Locus."""
+"""Generate a native Bittensor ED25519 miner hotkey for Teuton."""
 from __future__ import annotations
 
 import argparse
@@ -19,13 +19,13 @@ DEFAULT_WALLET_PATH = Path.home() / ".bittensor" / "wallets"
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Create a native ED25519 hotkey for Locus miners using bittensor-wallet "
+            "Create a native ED25519 hotkey for Teuton miners using bittensor-wallet "
             "crypto_type=0. The generated hotkey can be registered normally with btcli, "
             "and its metagraph SS58 hotkey can be used to encrypt presigned links."
         )
     )
-    parser.add_argument("--wallet-name", required=True, help="Bittensor wallet/coldkey name, e.g. locus_mining")
-    parser.add_argument("--hotkey", required=True, help="Hotkey name to create, e.g. locus_miner_ed25519_1")
+    parser.add_argument("--wallet-name", required=True, help="Bittensor wallet/coldkey name, e.g. teuton_mining")
+    parser.add_argument("--hotkey", required=True, help="Hotkey name to create, e.g. teuton_miner_ed25519_1")
     parser.add_argument("--wallet-path", type=Path, default=DEFAULT_WALLET_PATH, help=f"Wallet root path (default: {DEFAULT_WALLET_PATH})")
     parser.add_argument("--n-words", type=int, default=12, help="Mnemonic length for the native wallet generator")
     parser.add_argument("--overwrite", action="store_true", help="Overwrite existing generated files")
@@ -55,7 +55,7 @@ def self_test(seed: bytes, ss58_address: str) -> None:
     if signing_key.verify_key.encode() != public_key:
         raise RuntimeError("generated private seed does not match SS58 public key")
 
-    plaintext = b"https://example.invalid/locus-presigned-link-self-test"
+    plaintext = b"https://example.invalid/teuton-presigned-link-self-test"
     ciphertext = SealedBox(VerifyKey(public_key).to_curve25519_public_key()).encrypt(plaintext)
     decrypted = SealedBox(signing_key.to_curve25519_private_key()).decrypt(ciphertext)
     if decrypted != plaintext:
@@ -91,7 +91,7 @@ def main() -> int:
         raise RuntimeError("hotkey public file does not match the private hotkey file")
     self_test(seed, ss58_address)
 
-    print("Created ED25519 Locus miner hotkey")
+    print("Created ED25519 Teuton miner hotkey")
     print(f"wallet: {args.wallet_name}")
     print(f"hotkey: {args.hotkey}")
     print(f"ss58_address: {ss58_address}")

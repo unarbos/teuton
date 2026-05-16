@@ -1,6 +1,6 @@
 """Validator weight-setting watchdog.
 
-Polls the Bittensor finney chain and verifies that the Locus validator
+Polls the Bittensor finney chain and verifies that the Teuton validator
 hotkey has set weights on its netuid within the last N blocks
 (default 360 blocks = ~1 hour at 12s/block). If the gap exceeds the
 threshold the watchdog signs and submits ``set_weights(uids=[0],
@@ -63,7 +63,7 @@ def configure_logging(level: str) -> None:
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--netuid", type=int, default=int(os.environ.get("LOCUS_NETUID", 3)))
+    p.add_argument("--netuid", type=int, default=int(os.environ.get("TEUTON_NETUID", 3)))
     p.add_argument(
         "--wallet-name",
         default=os.environ.get("VALIDATOR_WALLET_NAME", "teutonic"),

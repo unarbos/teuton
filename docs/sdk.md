@@ -6,12 +6,12 @@ services can use the same core classes as the CLI.
 ## Package Boundaries
 
 ```text
-locus_core          protocol, paths, signatures, v2 IR import surface
-locus_runtime       storage, tensor codec, evaluator, job executor
-locus_orchestrator  run managers and schedulers
-locus_miner         miner neuron facade and worker supervisor
-locus_validator     replay verifier, scoring, Bittensor adapter
-locus_tasks         task plugins
+teuton_core          protocol, paths, signatures, v2 IR import surface
+teuton_runtime       storage, tensor codec, evaluator, job executor
+teuton_orchestrator  run managers and schedulers
+teuton_miner         miner neuron facade and worker supervisor
+teuton_validator     replay verifier, scoring, Bittensor adapter
+teuton_tasks         task plugins
 ```
 
 ## Local Round Run
@@ -20,12 +20,12 @@ locus_tasks         task plugins
 import threading
 import tempfile
 
-from locus_miner.neuron import MinerNeuron, MinerNeuronConfig
-from locus_orchestrator.run_manager import RunConfig, RunManager
-from locus_runtime.storage import open_local_bucket
-from locus_validator.neuron import ValidatorNeuron, ValidatorNeuronConfig
+from teuton_miner.neuron import MinerNeuron, MinerNeuronConfig
+from teuton_orchestrator.run_manager import RunConfig, RunManager
+from teuton_runtime.storage import open_local_bucket
+from teuton_validator.neuron import ValidatorNeuron, ValidatorNeuronConfig
 
-root = tempfile.mkdtemp(prefix="locus-v3-")
+root = tempfile.mkdtemp(prefix="teuton-v3-")
 bucket = open_local_bucket(root, "sdk")
 run_id = "sdk-round"
 
@@ -93,7 +93,7 @@ The validator should assign this hotkey a score of `0.0` after replay.
 ```python
 import os
 
-from locus_runtime.storage import S3Bucket
+from teuton_runtime.storage import S3Bucket
 
 bucket = S3Bucket(
     bucket=os.environ["S3_BUCKET"],
@@ -113,7 +113,7 @@ Use the same `bucket` object with `RunManager`, `MinerNeuron`, and
 v3 emits signed manifests and collects v3 receipts/verdicts.
 
 ```python
-from locus_orchestrator.streaming import StreamingRunConfig, StreamingRunManager
+from teuton_orchestrator.streaming import StreamingRunConfig, StreamingRunManager
 
 manager = StreamingRunManager(
     bucket=bucket,
@@ -127,7 +127,7 @@ manager = StreamingRunManager(
 manager.run_loop(timeout_sec=180)
 ```
 
-For small smoke tests, you can patch the imported `locus.tasks.gpt_pipe`
+For small smoke tests, you can patch the imported `teuton.tasks.gpt_pipe`
 globals before creating the manager, then run tiny stage/microbatch graphs.
 
 ## Signatures
@@ -156,7 +156,7 @@ is set, bytes are stored exactly as before.
 Signed output:
 
 ```python
-from locus_core.protocol import ArtifactCryptoPolicy, ArtifactRef, CryptoMode
+from teuton_core.protocol import ArtifactCryptoPolicy, ArtifactRef, CryptoMode
 
 delta = ArtifactRef(
     name="delta",
@@ -201,7 +201,7 @@ timelocked artifacts as inconclusive until their reveal round is available.
 For CLI runs, set an owner default:
 
 ```bash
-locus-v3 orchestrator \
+teuton-v3 orchestrator \
   --run-id RUN_ID \
   --task mlp \
   --crypto signed \
@@ -211,7 +211,7 @@ locus-v3 orchestrator \
 or:
 
 ```bash
-locus-v3 orchestrator \
+teuton-v3 orchestrator \
   --run-id RUN_ID \
   --task mlp \
   --crypto drand-timelock \
@@ -224,7 +224,7 @@ For production-style bucket access, keep the manifest public and put sensitive
 bearer URLs in an encrypted assignment grant.
 
 ```bash
-locus-v3 orchestrator \
+teuton-v3 orchestrator \
   --run-id RUN_ID \
   --task mlp \
   --grant-mode presigned \
@@ -244,8 +244,8 @@ contains encrypted GET/PUT grants for those exact URIs plus the receipt URI.
 Local tests can use the same path without S3:
 
 ```bash
-locus-v3 orchestrator --run-id RUN_ID --grant-mode local
-locus-v3 miner --run-id RUN_ID --hotkey miner0 --grant-mode local
+teuton-v3 orchestrator --run-id RUN_ID --grant-mode local
+teuton-v3 miner --run-id RUN_ID --hotkey miner0 --grant-mode local
 ```
 
 ## Lifecycle
@@ -253,7 +253,7 @@ locus-v3 miner --run-id RUN_ID --hotkey miner0 --grant-mode local
 Use the v3 lifecycle helper to clean all prefixes owned by a run:
 
 ```python
-from locus_runtime.lifecycle import wipe_run
+from teuton_runtime.lifecycle import wipe_run
 
 deleted = wipe_run(bucket, netuid=0, run_id="sdk-round")
 print(deleted)
