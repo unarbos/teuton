@@ -3,6 +3,11 @@
 This ports the important v2 streaming idea into the v3 manifest/receipt world:
 the task may still use v2 graph builders and v2 artifact URIs internally, but
 job assignment, signatures, receipts, and validation are v3-native.
+
+Reducing synchronization depth (for example fusing reduce with outer or
+computing eval inside the outer graph) is left to future task/graph work: it
+must preserve numerical equivalence and stay compatible with quota release and
+verification policies on terminal outputs.
 """
 from __future__ import annotations
 
@@ -297,11 +302,6 @@ class StreamingRunManager:
         self.emitted.append(job_id)
         self.jobs[job_id] = manifest
         self.bucket.put_json(self.bucket.uri_for_key(paths.job_index_key(self.config.netuid, self.config.run_id)), self.emitted)
-        step_index = self.bucket.uri_for_key(paths.job_step_index_key(self.config.netuid, self.config.run_id, step_id))
-        current = self.bucket.get_json(step_index) if self.bucket.exists(step_index) else []
-        if job_id not in current:
-            current.append(job_id)
-        self.bucket.put_json(step_index, current)
         return manifest
 
     def wait_epoch(self, epoch: int, *, deadline: float, poll_interval: float) -> None:

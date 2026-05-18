@@ -7,7 +7,7 @@ from teuton_miner.worker import MinerWorker, WorkerConfig
 from teuton_orchestrator.run_manager import RunConfig, RunManager
 
 
-def test_round_flow_writes_step_index_and_outputs(local_bucket, run_id, start_miners) -> None:
+def test_round_flow_writes_job_index_and_outputs(local_bucket, run_id, start_miners) -> None:
     start_miners(run_id=run_id, count=2)
     manager = RunManager(
         bucket=local_bucket,
@@ -16,8 +16,8 @@ def test_round_flow_writes_step_index_and_outputs(local_bucket, run_id, start_mi
 
     manager.run_loop(timeout_sec=30)
 
-    step_index_uri = local_bucket.uri_for_key(paths.job_step_index_key(0, run_id, 0))
-    jobs = local_bucket.get_json(step_index_uri)
+    index_uri = local_bucket.uri_for_key(paths.job_index_key(0, run_id))
+    jobs = local_bucket.get_json(index_uri)
     assert "step0-eval" in jobs
     assert len(jobs) == 10
     assert local_bucket.exists(local_bucket.uri_for_key(paths.weights_key(0, run_id, 1, 0)))

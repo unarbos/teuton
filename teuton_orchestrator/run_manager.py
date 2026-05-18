@@ -1,4 +1,9 @@
-"""Run manager and job emitter for Teuton v3."""
+"""Run manager and job emitter for Teuton v3.
+
+Training rounds are expressed as separate manifests per stage; merging stages
+into fewer graphs (for fewer barrier rounds) is a task-level concern and must
+preserve verifier/orchestrator semantics on job kinds and outputs.
+"""
 from __future__ import annotations
 
 import json
@@ -262,16 +267,6 @@ class RunManager:
             self.bucket.uri_for_key(paths.job_index_key(self.config.netuid, self.config.run_id)),
             self.emitted,
         )
-        step_index_uri = self.bucket.uri_for_key(
-            paths.job_step_index_key(self.config.netuid, self.config.run_id, step)
-        )
-        try:
-            step_jobs = self.bucket.get_json(step_index_uri) if self.bucket.exists(step_index_uri) else []
-        except Exception:
-            step_jobs = []
-        if job_id not in step_jobs:
-            step_jobs.append(job_id)
-        self.bucket.put_json(step_index_uri, step_jobs)
         return manifest
 
     def load_job(self, job_id: str) -> JobManifestV3:

@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from teuton_core import paths
+from teuton_core.job_index import list_job_ids
 from teuton_core.protocol import ArtifactRef, AuditResultV3, JobManifestV3, JobReceiptV3, VerificationVerdictV3
 from teuton_runtime.discovery import (
     BucketMinerObservation,
@@ -305,14 +306,22 @@ def _machines(bucket: ObjectStore, *, netuid: int, run_id: str, config: Visualiz
 def _load_manifests(bucket: ObjectStore, *, netuid: int, run_id: str, max_jobs: int) -> list[tuple[JobManifestV3, str]]:
     out: list[tuple[JobManifestV3, str]] = []
     seen: set[str] = set()
-    for job_id in _job_ids(bucket, paths.job_index_key(netuid, run_id), paths.jobs_prefix(netuid, run_id)):
+    for job_id in list_job_ids(
+        bucket,
+        index_key=paths.job_index_key(netuid, run_id),
+        jobs_prefix_key=paths.jobs_prefix(netuid, run_id),
+    ):
         manifest = _load_manifest_uri(bucket, bucket.uri_for_key(paths.job_manifest_key(netuid, run_id, job_id)))
         if manifest is not None and manifest.job_id not in seen:
             out.append((manifest, "train"))
             seen.add(manifest.job_id)
         if len(out) >= max_jobs:
             return out
-    for job_id in _job_ids(bucket, paths.audit_job_index_key(netuid, run_id), paths.audit_jobs_prefix(netuid, run_id)):
+    for job_id in list_job_ids(
+        bucket,
+        index_key=paths.audit_job_index_key(netuid, run_id),
+        jobs_prefix_key=paths.audit_jobs_prefix(netuid, run_id),
+    ):
         manifest = _load_manifest_uri(bucket, bucket.uri_for_key(paths.audit_job_manifest_key(netuid, run_id, job_id)))
         if manifest is not None and manifest.job_id not in seen:
             out.append((manifest, "audit"))
@@ -320,22 +329,6 @@ def _load_manifests(bucket: ObjectStore, *, netuid: int, run_id: str, max_jobs: 
         if len(out) >= max_jobs:
             return out
     return out
-
-
-def _job_ids(bucket: ObjectStore, index_key: str, prefix: str) -> list[str]:
-    ids: list[str] = []
-    index_uri = bucket.uri_for_key(index_key)
-    try:
-        if bucket.exists(index_uri):
-            ids.extend(str(x) for x in bucket.get_json(index_uri))
-    except Exception:
-        pass
-    if ids:
-        return ids
-    for uri in bucket.list(bucket.uri_for_key(prefix)):
-        if uri.endswith("/manifest.json"):
-            ids.append(uri.rsplit("/", 2)[-2])
-    return ids
 
 
 def _load_manifest_uri(bucket: ObjectStore, uri: str) -> JobManifestV3 | None:

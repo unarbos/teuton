@@ -28,6 +28,7 @@ from urllib.parse import parse_qs, urlparse
 
 from teuton_core import paths
 from teuton_core.discovery_ui import INDEX_HTML, _load_logo_bytes
+from teuton_core.job_index import list_job_ids
 from teuton_core.protocol import AuditResultV3, JobManifestV3, JobReceiptV3, VerificationVerdictV3
 from teuton_runtime.discovery import scan_bucket_discovery_records
 from teuton_runtime.storage import ObjectStore
@@ -347,7 +348,12 @@ def _index_jobs(bucket: ObjectStore, db: DashboardDB, config: DashboardConfig, r
         ("train", paths.job_index_key(config.netuid, run_id), paths.jobs_prefix(config.netuid, run_id), paths.job_manifest_key),
         ("audit", paths.audit_job_index_key(config.netuid, run_id), paths.audit_jobs_prefix(config.netuid, run_id), paths.audit_job_manifest_key),
     ):
-        for job_id in _job_ids(bucket, index_key, prefix)[: config.max_jobs]:
+        for job_id in list_job_ids(
+            bucket,
+            index_key=index_key,
+            jobs_prefix_key=prefix,
+            manifest_list_max_uris=2000,
+        )[: config.max_jobs]:
             if job_id in seen:
                 continue
             manifest = _load_manifest(bucket, bucket.uri_for_key(manifest_key(config.netuid, run_id, job_id)))
@@ -945,20 +951,6 @@ def _summary(*, machines: list[dict[str, Any]], jobs: list[dict[str, Any]], arti
         "by_kind": by_kind,
         "by_worker": by_worker,
     }
-
-
-def _job_ids(bucket: ObjectStore, index_key: str, prefix: str) -> list[str]:
-    index_uri = bucket.uri_for_key(index_key)
-    try:
-        if bucket.exists(index_uri):
-            return [str(x) for x in bucket.get_json(index_uri)]
-    except Exception:
-        pass
-    ids: list[str] = []
-    for uri in bucket.list(bucket.uri_for_key(prefix))[:2000]:
-        if uri.endswith("/manifest.json"):
-            ids.append(uri.rsplit("/", 2)[-2])
-    return ids
 
 
 def _load_manifest(bucket: ObjectStore, uri: str) -> JobManifestV3 | None:

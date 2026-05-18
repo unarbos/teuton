@@ -43,10 +43,18 @@ def job_manifest_key(netuid: int, run_id: str, job_id: str) -> str:
 
 
 def job_index_key(netuid: int, run_id: str) -> str:
+    """Authoritative ordered list of training job IDs for this run (orchestrator
+    appends on each emit; miners should prefer this over scanning ``jobs_prefix``).
+    Resolve IDs with ``teuton_core.job_index.list_job_ids``.
+    """
     return f"{jobs_prefix(netuid, run_id)}index.json"
 
 
 def job_step_index_key(netuid: int, run_id: str, step_id: int) -> str:
+    """Legacy path; not written by current orchestrators. Job discovery uses
+    ``job_index_key`` (single aggregate list). Kept for compatibility with old
+    bucket layouts and tools that scan historical objects.
+    """
     return f"{jobs_prefix(netuid, run_id)}step={step_id}/index.json"
 
 

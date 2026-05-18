@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from teuton_core import paths
+from teuton_core.job_index import list_job_ids
 from teuton_core.protocol import (
     AssignmentGrantV3,
     EncryptedAssignmentGrantV3,
@@ -57,6 +58,8 @@ class WorkerConfig:
     audit_eligible_hotkeys: list[str] = field(default_factory=list)
     owner_secret: str = "owner-dev-secret"
     owner_hotkey: str = ""
+    # None = no limit; otherwise cap training jobs executed per tick() wake.
+    max_jobs_per_tick: int | None = None
 
 
 class MinerWorker:
@@ -141,9 +144,16 @@ class MinerWorker:
 
     def tick(self) -> bool:
         self.heartbeat()
-        index_uri = self.bucket.uri_for_key(paths.job_index_key(self.config.netuid, self.config.run_id))
-        job_ids = self._job_ids(index_uri)
+        job_ids = list_job_ids(
+            self.bucket,
+            index_key=paths.job_index_key(self.config.netuid, self.config.run_id),
+            jobs_prefix_key=paths.jobs_prefix(self.config.netuid, self.config.run_id),
+        )
+        cap = self.config.max_jobs_per_tick
+        jobs_done = 0
         for job_id in job_ids:
+            if cap is not None and jobs_done >= cap:
+                break
             manifest_uri = self.bucket.uri_for_key(paths.job_manifest_key(self.config.netuid, self.config.run_id, job_id))
             if not self.bucket.exists(manifest_uri):
                 continue
@@ -182,6 +192,8 @@ class MinerWorker:
             else:
                 self.bucket.put_json(receipt_uri, receipt.to_dict())
             self.idle_iters = 0
+            jobs_done += 1
+        if jobs_done:
             return True
         # No training work to do this tick — if we're flagged as an audit-
         # eligible peer, sweep the audit job index for work assigned to us.
@@ -272,27 +284,6 @@ class MinerWorker:
         if grant.expires_unix < now:
             raise ValueError("audit assignment grant expired")
         return grant
-
-    def _job_ids(self, fallback_index_uri: str) -> list[str]:
-        out: list[str] = []
-        jobs_prefix = self.bucket.uri_for_key(paths.jobs_prefix(self.config.netuid, self.config.run_id))
-        for uri in self.bucket.list(jobs_prefix):
-            if not uri.endswith("/index.json"):
-                continue
-            try:
-                for job_id in self.bucket.get_json(uri):
-                    if job_id not in out:
-                        out.append(job_id)
-            except Exception:
-                continue
-        if out:
-            return out
-        if self.bucket.exists(fallback_index_uri):
-            try:
-                return list(self.bucket.get_json(fallback_index_uri))
-            except Exception:
-                return []
-        return []
 
     def load_assignment_grant(self, manifest: JobManifestV3) -> AssignmentGrantV3:
         uri = self.bucket.uri_for_key(
