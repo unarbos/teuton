@@ -13,6 +13,7 @@ from teuton_runtime.discovery import (
     derive_miners_from_bucket,
     scan_bucket_discovery_records,
 )
+from teuton_runtime.queue import read_queue
 from teuton_runtime.storage import ObjectStore
 
 
@@ -305,14 +306,14 @@ def _machines(bucket: ObjectStore, *, netuid: int, run_id: str, config: Visualiz
 def _load_manifests(bucket: ObjectStore, *, netuid: int, run_id: str, max_jobs: int) -> list[tuple[JobManifestV3, str]]:
     out: list[tuple[JobManifestV3, str]] = []
     seen: set[str] = set()
-    for job_id in _job_ids(bucket, paths.job_index_key(netuid, run_id), paths.jobs_prefix(netuid, run_id)):
+    for job_id in _queue_job_ids(bucket, netuid=netuid, run_id=run_id, role="train"):
         manifest = _load_manifest_uri(bucket, bucket.uri_for_key(paths.job_manifest_key(netuid, run_id, job_id)))
         if manifest is not None and manifest.job_id not in seen:
             out.append((manifest, "train"))
             seen.add(manifest.job_id)
         if len(out) >= max_jobs:
             return out
-    for job_id in _job_ids(bucket, paths.audit_job_index_key(netuid, run_id), paths.audit_jobs_prefix(netuid, run_id)):
+    for job_id in _queue_job_ids(bucket, netuid=netuid, run_id=run_id, role="audit"):
         manifest = _load_manifest_uri(bucket, bucket.uri_for_key(paths.audit_job_manifest_key(netuid, run_id, job_id)))
         if manifest is not None and manifest.job_id not in seen:
             out.append((manifest, "audit"))
@@ -322,20 +323,18 @@ def _load_manifests(bucket: ObjectStore, *, netuid: int, run_id: str, max_jobs: 
     return out
 
 
-def _job_ids(bucket: ObjectStore, index_key: str, prefix: str) -> list[str]:
-    ids: list[str] = []
-    index_uri = bucket.uri_for_key(index_key)
+def _queue_job_ids(bucket: ObjectStore, *, netuid: int, run_id: str, role: str) -> list[str]:
+    """Outstanding job ids from the orchestrator queue snapshot.
+
+    Returns ``[]`` when the queue file is missing.
+    """
     try:
-        if bucket.exists(index_uri):
-            ids.extend(str(x) for x in bucket.get_json(index_uri))
+        state = read_queue(bucket, netuid=netuid, run_id=run_id, role=role)
     except Exception:
-        pass
-    if ids:
-        return ids
-    for uri in bucket.list(bucket.uri_for_key(prefix)):
-        if uri.endswith("/manifest.json"):
-            ids.append(uri.rsplit("/", 2)[-2])
-    return ids
+        return []
+    if state is None:
+        return []
+    return [entry.job_id for entry in state.outstanding]
 
 
 def _load_manifest_uri(bucket: ObjectStore, uri: str) -> JobManifestV3 | None:

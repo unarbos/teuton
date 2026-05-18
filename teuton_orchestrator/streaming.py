@@ -6,6 +6,7 @@ job assignment, signatures, receipts, and validation are v3-native.
 """
 from __future__ import annotations
 
+import os
 import time
 from dataclasses import dataclass
 
@@ -17,9 +18,17 @@ from teuton_core.telemetry import TelemetryWriter
 from teuton_core.wallet_crypto import AssignmentEncryptor, DevAssignmentCrypto, Ed25519SealedBoxAssignmentCrypto
 from teuton_runtime.discovery import build_discovery_backend
 from teuton_runtime.grants import broker_for_mode
+from teuton_runtime.queue import OrchestratorQueue, QueueEntry, scan_recent_receipt_job_ids
 from teuton_runtime.storage import ObjectStore
 from teuton_tasks import load_streaming_task
 from .scheduler import QuotaBook
+
+
+# Per-hotkey backpressure: orchestrator refuses to emit more work for a miner
+# that already has this many outstanding entries in the queue. Replaces the
+# legacy ``TEUTON_BASE_QUOTA=50000`` workaround that defeated all flow
+# control. Override via env if a particular run wants a deeper queue.
+_DEFAULT_MAX_INFLIGHT_PER_HOTKEY = int(os.environ.get("TEUTON_MAX_INFLIGHT_PER_HOTKEY", "8"))
 
 
 @dataclass
@@ -38,6 +47,20 @@ class StreamingRunConfig:
     network: str = "finney"
     discovery_backend: str = "bucket"
     discovery_heartbeat_ttl_sec: float | None = 30.0
+    stress_emit: bool = False
+    stress_emit_interval: float = 0.0
+    stress_epoch_base: int = 1_000_000
+    stress_pin_weights_epoch: int = 0
+    stress_skip_bootstrap_if_present: bool = True
+    stress_max_iterations: int = 0
+    epoch_timeout_sec: float = 300.0
+    # Queue-depth backpressure. ``max_inflight_per_hotkey`` is the maximum
+    # number of outstanding queue entries any one miner may have at once;
+    # ``emit_*`` blocks (or skips) when the limit is hit so slow miners don't
+    # accumulate work. ``flush_interval_sec`` controls how often the queue
+    # snapshot is published to the bucket.
+    max_inflight_per_hotkey: int = _DEFAULT_MAX_INFLIGHT_PER_HOTKEY
+    queue_flush_interval_sec: float = 0.5
 
 
 class StreamingRunManager:
@@ -72,13 +95,51 @@ class StreamingRunManager:
             run_id=config.run_id,
             component="orchestrator",
         )
+        # Authoritative outstanding-work queue. Replaces the per-emit
+        # ``index.json`` / ``hotkey={hk}/index.json`` / ``step={n}/index.json``
+        # writes. Reconcile from the bucket on startup so a restarted
+        # orchestrator picks up where the previous one left off.
+        self.queue = OrchestratorQueue(
+            bucket=bucket,
+            netuid=config.netuid,
+            run_id=config.run_id,
+            role="train",
+            flush_interval_sec=config.queue_flush_interval_sec,
+        )
+        self.queue.reconcile_from_bucket()
+        self.queue.start_background_flush()
+        # Tracks the receipt-prefix mtime cursor for incremental scans in
+        # ``_drain_queue_via_receipts``. Initialised to "now" so the cold
+        # scan ignores stale receipts from previous runs that share
+        # epoch-based job_ids (e.g. stress mode emits ``j-e1000000-...``
+        # every restart, and yesterday's receipts for the same job_id
+        # would otherwise drain today's queue entries before miners can
+        # process them).
+        self._receipt_scan_cursor: float = time.time()
 
     def bootstrap(self) -> None:
-        self.task.bootstrap(bucket=self.bucket, run_id=self.config.run_id, max_rounds=self.config.max_epochs)
+        if not (self.config.stress_emit and self._bootstrap_artifacts_present()):
+            self.task.bootstrap(bucket=self.bucket, run_id=self.config.run_id, max_rounds=self.config.max_epochs)
         stages, params = self.task.build_streaming_inputs(bucket=self.bucket, run_id=self.config.run_id)
         params.max_epochs = self.config.max_epochs
         self.stages = stages
         self.params = params
+
+    def _bootstrap_artifacts_present(self) -> bool:
+        """Return True when an existing run already has the static artifacts we
+        would otherwise rebuild. Lets the stress emitter attach to a live run
+        without reseeding tokens/weights, which is critical for compatibility
+        with miners that have already pinned to those URIs.
+        """
+        if not self.config.stress_skip_bootstrap_if_present:
+            return False
+        manifest_uri = self.bucket.uri_for_key(
+            paths.manifest_config_key(self.config.netuid, self.config.run_id)
+        )
+        try:
+            return bool(self.bucket.exists(manifest_uri))
+        except Exception:
+            return False
 
     def discover_workers(self) -> list[WorkerIdentity]:
         records = self.discovery.discover_workers()
@@ -88,34 +149,162 @@ class StreamingRunManager:
 
     def run_loop(self, *, poll_interval: float = 0.1, timeout_sec: float = 600.0) -> None:
         self.bootstrap()
-        deadline = time.time() + timeout_sec
-        for epoch in range(self.config.max_epochs):
-            while time.time() < deadline and not self.discover_workers():
-                time.sleep(poll_interval)
-            if time.time() >= deadline:
-                raise TimeoutError("no miners available for streaming run")
-            t_emit = time.time()
-            self.emit_epoch(epoch)
-            emit_seconds = time.time() - t_emit
-            t_wait = time.time()
-            outcome = "ok"
-            try:
-                self.wait_epoch(epoch, deadline=deadline, poll_interval=poll_interval)
-            except TimeoutError:
-                outcome = "timeout"
+        try:
+            if self.config.stress_emit:
+                self._run_stress_emit_loop(poll_interval=poll_interval, timeout_sec=timeout_sec)
+                return
+            deadline = time.time() + timeout_sec
+            for epoch in range(self.config.max_epochs):
+                while time.time() < deadline and not self.discover_workers():
+                    time.sleep(poll_interval)
+                if time.time() >= deadline:
+                    raise TimeoutError("no miners available for streaming run")
+                t_emit = time.time()
+                self.emit_epoch(epoch)
+                emit_seconds = time.time() - t_emit
+                t_wait = time.time()
+                outcome = "ok"
+                epoch_deadline = min(deadline, t_wait + max(0.0, self.config.epoch_timeout_sec))
+                try:
+                    self.wait_epoch(epoch, deadline=epoch_deadline, poll_interval=poll_interval)
+                except TimeoutError:
+                    outcome = "timeout"
+                    self._emit_epoch_telemetry(
+                        epoch=epoch,
+                        emit_seconds=emit_seconds,
+                        wait_seconds=time.time() - t_wait,
+                        outcome=outcome,
+                    )
+                    raise
                 self._emit_epoch_telemetry(
                     epoch=epoch,
                     emit_seconds=emit_seconds,
                     wait_seconds=time.time() - t_wait,
                     outcome=outcome,
                 )
-                raise
-            self._emit_epoch_telemetry(
-                epoch=epoch,
-                emit_seconds=emit_seconds,
-                wait_seconds=time.time() - t_wait,
-                outcome=outcome,
+        finally:
+            # Flush the final queue snapshot and stop the background thread
+            # so the bucket reflects the actual outstanding state on exit.
+            self.queue.stop()
+
+    def stop(self) -> None:
+        """Stop the queue's background flush thread (idempotent)."""
+        self.queue.stop()
+
+    def _run_stress_emit_loop(self, *, poll_interval: float, timeout_sec: float) -> None:
+        """Continuously publish work for network load testing.
+
+        - Iterates a synthetic epoch counter starting at ``stress_epoch_base``
+          so emitted ``j-e{epoch}-...`` IDs never collide with the historic
+          range any orchestrator already used for this run.
+        - Pins all per-epoch weight URIs to ``stress_pin_weights_epoch`` so
+          miners always read the bootstrap-time weights instead of waiting on
+          outer steps that we deliberately do not emit.
+        - Emits forward jobs only (training=False) so there is no
+          inter-epoch dependency that can stall the pipeline.
+        - Periodically rediscovers live workers so newly-joined miners pick up
+          work without an orchestrator restart.
+        """
+        deadline = time.time() + timeout_sec
+        while time.time() < deadline and not self.discover_workers():
+            time.sleep(poll_interval)
+        if time.time() >= deadline:
+            raise TimeoutError("no miners available for streaming stress run")
+
+        iteration = 0
+        while time.time() < deadline:
+            if self.config.stress_max_iterations and iteration >= self.config.stress_max_iterations:
+                return
+            epoch = self.config.stress_epoch_base + iteration
+            iteration += 1
+            try:
+                self.discover_workers()
+            except Exception:
+                pass
+            # Drain receipts -> queue BEFORE emit so backpressure reflects
+            # currently-completed work. Without this, every epoch sees the
+            # queue at "post-last-emit" depth and refuses to emit.
+            self._drain_queue_via_receipts()
+            t_emit = time.time()
+            before = len(self.emitted)
+            try:
+                self.emit_epoch(epoch, forward_only=True)
+            except RuntimeError as exc:
+                # `pick_worker` raises when no live miner has queue room or
+                # quota; back off and rediscover.
+                print(
+                    f"[orchestrator:stress] epoch={epoch} pick_worker err: {exc!r}; "
+                    f"queue_depth={self.queue.depth()} sleeping 5s",
+                    flush=True,
+                )
+                self._drop_epoch_jobs(epoch)
+                time.sleep(5.0)
+                continue
+            emit_seconds = time.time() - t_emit
+            self._release_epoch_quota(epoch)
+            try:
+                self._emit_epoch_telemetry(
+                    epoch=epoch,
+                    emit_seconds=emit_seconds,
+                    wait_seconds=0.0,
+                    outcome="stress_emitted",
+                )
+            except Exception:
+                pass
+            emitted = len(self.emitted) - before
+            # NOTE: do NOT drop epoch jobs from the queue here. In the legacy
+            # design we cleared local bookkeeping immediately because the
+            # quota accounting was emit-time only; with the queue we need
+            # entries to stay until receipts land (or the deadline expires)
+            # so workers can pick them up.
+            self.jobs = {
+                job_id: manifest
+                for job_id, manifest in self.jobs.items()
+                if not job_id.startswith(f"j-e{epoch}-")
+            }
+            print(
+                f"[orchestrator:stress] iter={iteration} epoch={epoch} "
+                f"emitted_jobs={emitted} emit_seconds={emit_seconds:.3f} "
+                f"queue_depth={self.queue.depth()} "
+                f"workers={sum(len(a.workers) for a in self.quota.accounts.values())}",
+                flush=True,
             )
+            if self.config.stress_emit_interval > 0:
+                time.sleep(self.config.stress_emit_interval)
+
+    def epoch_weights_uri(self, epoch: int, stage_id: int) -> str:
+        effective = self.config.stress_pin_weights_epoch if self.config.stress_emit else epoch
+        return self.bucket.uri_for_key(
+            f"runs/{self.config.run_id}/weights/epoch={effective}/stage_{stage_id}_W.bin"
+        )
+
+    def _release_epoch_quota(self, epoch: int) -> None:
+        """Release legacy QuotaBook reservations for an epoch.
+
+        Queue depth is now the authoritative backpressure signal; the
+        QuotaBook is retained only for ``pick_worker`` priority math
+        (``priority = trust * (1 + #workers) / inflight_cu``). Releasing
+        reservations here keeps the priority denominator from drifting.
+        """
+        epoch_prefix = f"j-e{epoch}-"
+        for job_id, manifest in self.jobs.items():
+            if job_id.startswith(epoch_prefix):
+                self.quota.release(manifest.assigned_hotkey)
+
+    def _drop_epoch_jobs(self, epoch: int) -> None:
+        """Remove epoch entries from local bookkeeping AND the queue.
+
+        The queue is the source of truth, so dropping here also unblocks
+        ``max_inflight_per_hotkey`` budget for the assigned miners.
+        """
+        epoch_prefix = f"j-e{epoch}-"
+        drop_ids = [job_id for job_id in self.jobs if job_id.startswith(epoch_prefix)]
+        self.queue.remove_many(drop_ids)
+        self.jobs = {
+            job_id: manifest
+            for job_id, manifest in self.jobs.items()
+            if not job_id.startswith(epoch_prefix)
+        }
 
     def _emit_epoch_telemetry(
         self,
@@ -158,6 +347,7 @@ class StreamingRunManager:
                     "n_microbatches": n_mb,
                     "n_stages": int(getattr(self.params, "n_stages", 0) or 0),
                     "by_kind": by_kind,
+                    "queue": self._queue_telemetry(),
                     "manifest_config": {
                         k: manifest_cfg.get(k)
                         for k in (
@@ -170,7 +360,33 @@ class StreamingRunManager:
         except Exception:
             pass
 
-    def emit_epoch(self, epoch: int) -> None:
+    def _queue_telemetry(self) -> dict:
+        """Snapshot of queue depth + per-hotkey distribution.
+
+        Cheap (in-memory only) and reported on every epoch telemetry emit
+        so dashboards can plot queue_depth over time and detect "queue
+        getting huge and never draining" in seconds.
+        """
+        per_hotkey: dict[str, int] = {}
+        for entry in list(self.queue):
+            per_hotkey[entry.assigned_hotkey] = per_hotkey.get(entry.assigned_hotkey, 0) + 1
+        depth = sum(per_hotkey.values())
+        depths = sorted(per_hotkey.values())
+        if depths:
+            p99 = depths[min(len(depths) - 1, int(0.99 * len(depths)))]
+            mx = depths[-1]
+        else:
+            p99 = 0
+            mx = 0
+        return {
+            "depth": depth,
+            "n_hotkeys_with_work": len(per_hotkey),
+            "depth_p99_per_hotkey": p99,
+            "depth_max_per_hotkey": mx,
+            "max_inflight_per_hotkey": self.config.max_inflight_per_hotkey,
+        }
+
+    def emit_epoch(self, epoch: int, *, forward_only: bool = False) -> None:
         for stage in self.stages:
             for graph in (stage.forward_graph, stage.backward_graph, stage.outer_graph):
                 if graph is None:
@@ -183,6 +399,8 @@ class StreamingRunManager:
         for mb in range(self.params.n_microbatches):
             for stage in self.stages:
                 self.emit_forward(epoch, mb, stage)
+        if forward_only:
+            return
         if self.params.training:
             for mb in range(self.params.n_microbatches):
                 for stage in reversed(self.stages):
@@ -192,7 +410,7 @@ class StreamingRunManager:
                 if stage.outer_graph is not None:
                     self.emit_outer(epoch, stage)
 
-    def emit_forward(self, epoch: int, mb: int, stage) -> JobManifestV3:
+    def emit_forward(self, epoch: int, mb: int, stage, *, force_worker: WorkerIdentity | None = None) -> JobManifestV3:
         s = stage.stage_id
         inputs: list[ArtifactRef] = []
         if s != 0:
@@ -219,6 +437,7 @@ class StreamingRunManager:
             params={**self.params.common_params, **self.params.forward_params, "epoch": epoch, "stage": s, "mb": mb, "mb_seed": epoch * 10000 + mb},
             inputs=inputs,
             outputs=outputs,
+            force_worker=force_worker,
         )
 
     def emit_backward(self, epoch: int, mb: int, stage) -> JobManifestV3:
@@ -269,9 +488,30 @@ class StreamingRunManager:
             outputs=outputs,
         )
 
-    def emit_job(self, *, job_id: str, kind: str, step_id: int, graph, params: dict, inputs: list[ArtifactRef], outputs: list[ArtifactRef]) -> JobManifestV3:
+    def emit_job(
+        self,
+        *,
+        job_id: str,
+        kind: str,
+        step_id: int,
+        graph,
+        params: dict,
+        inputs: list[ArtifactRef],
+        outputs: list[ArtifactRef],
+        force_worker: WorkerIdentity | None = None,
+    ) -> JobManifestV3:
         requirements = self.resource_requirements(params)
-        worker = self.quota.pick_worker(requirements=requirements)
+        # ``force_worker`` lets external callers (e.g. the ``teuton-v3 send-job``
+        # CLI) pin a manifest to a specific miner/worker without going through
+        # the QuotaBook. Default behaviour is unchanged.
+        if force_worker is not None:
+            worker = force_worker
+        else:
+            max_inflight = self.config.max_inflight_per_hotkey
+            worker = self.quota.pick_worker(
+                requirements=requirements,
+                hotkey_filter=lambda hk: self.queue.depth(hk) < max_inflight,
+            )
         now = int(time.time())
         sha = graph.graph_id()
         outputs = [self.resolve_output_crypto(ref, worker) for ref in outputs]
@@ -292,30 +532,26 @@ class StreamingRunManager:
             resource_requirements=requirements,
             verification_policy=VerificationPolicy(critical=kind == "pipe_outer"),
         ).sign(self.config.owner_signer or self.config.owner_secret)
-        self.bucket.put_json(self.bucket.uri_for_key(paths.job_manifest_key(self.config.netuid, self.config.run_id, job_id)), manifest.to_dict())
-        self.emit_assignment_grant(manifest)
+        manifest_uri = self.bucket.uri_for_key(paths.job_manifest_key(self.config.netuid, self.config.run_id, job_id))
+        self.bucket.put_json(manifest_uri, manifest.to_dict())
+        grant_uri = self.emit_assignment_grant(manifest)
         self.emitted.append(job_id)
         self.jobs[job_id] = manifest
-        self.bucket.put_json(self.bucket.uri_for_key(paths.job_index_key(self.config.netuid, self.config.run_id)), self.emitted)
-        step_index = self.bucket.uri_for_key(paths.job_step_index_key(self.config.netuid, self.config.run_id, step_id))
-        current = self.bucket.get_json(step_index) if self.bucket.exists(step_index) else []
-        if job_id not in current:
-            current.append(job_id)
-        self.bucket.put_json(step_index, current)
+        self.queue.add(QueueEntry.from_manifest(manifest, manifest_uri=manifest_uri, grant_uri=grant_uri))
         return manifest
 
     def wait_epoch(self, epoch: int, *, deadline: float, poll_interval: float) -> None:
         """Block until this epoch's tail outputs and (for training) outer weights
         all exist on the bucket.
 
-        Also releases QuotaBook entries as each emitted job's terminal output
-        appears. Prior to this we leaked quota forever, requiring
-        TEUTON_BASE_QUOTA=1000 as a workaround.
+        Drains the queue concurrently via :meth:`_drain_queue_via_receipts`
+        so completed jobs are removed from the published snapshot promptly.
         """
         tail = self.params.n_stages - 1
         released: set[str] = set()
         epoch_prefix = f"j-e{epoch}-"
         while time.time() < deadline:
+            self._drain_queue_via_receipts()
             done = sum(
                 1
                 for mb in range(self.params.n_microbatches)
@@ -331,8 +567,10 @@ class StreamingRunManager:
                         outer_done = False
                         break
 
-            # Walk this epoch's jobs and release quota for any whose terminal
-            # output exists.
+            # Walk this epoch's jobs and release legacy QuotaBook reservations
+            # for any whose terminal output exists. Queue depth is the
+            # authoritative backpressure signal; this is just the priority
+            # math feed.
             for job_id, manifest in self.jobs.items():
                 if job_id in released:
                     continue
@@ -349,9 +587,10 @@ class StreamingRunManager:
                         continue
                     self.quota.release(manifest.assigned_hotkey)
                     released.add(job_id)
+                # Final reconcile of the queue so completed work disappears.
+                self._drain_queue_via_receipts()
                 return
             time.sleep(poll_interval)
-        # Timeout - release whatever we have so we don't trap quota forever.
         for job_id, manifest in self.jobs.items():
             if job_id in released or not job_id.startswith(epoch_prefix):
                 continue
@@ -369,8 +608,33 @@ class StreamingRunManager:
         except Exception:
             return False
 
-    def epoch_weights_uri(self, epoch: int, stage_id: int) -> str:
-        return self.bucket.uri_for_key(f"runs/{self.config.run_id}/weights/epoch={epoch}/stage_{stage_id}_W.bin")
+    def _drain_queue_via_receipts(self) -> int:
+        """Remove queue entries whose receipts have landed.
+
+        Scans the receipts prefix incrementally (mtime > last cursor) so the
+        cost is O(receipts since last drain), not O(receipts in the run).
+        Called from ``wait_epoch`` and the stress loop. Also expires
+        deadline-passed entries so misbehaving miners don't permanently hold
+        their per-hotkey budget.
+        """
+        # Slight backdate so a clock skew between bucket and orchestrator
+        # doesn't cause us to miss a receipt that landed at exactly the
+        # cursor time.
+        since = max(0.0, self._receipt_scan_cursor - 5.0)
+        try:
+            done_ids = scan_recent_receipt_job_ids(
+                self.bucket,
+                netuid=self.config.netuid,
+                run_id=self.config.run_id,
+                since_unix=since if since > 0 else None,
+            )
+        except Exception:
+            done_ids = set()
+        removed = self.queue.remove_many(done_ids) if done_ids else 0
+        # Drop deadline-expired entries so per-hotkey backpressure releases.
+        expired = self.queue.prune_expired()
+        self._receipt_scan_cursor = time.time()
+        return removed + len(expired)
 
     def fwd_output_uri(self, epoch: int, stage_id: int, mb: int, name: str) -> str:
         return self.bucket.uri_for_key(f"runs/{self.config.run_id}/streaming/epoch={epoch}/stage={stage_id}/outputs/mb={mb}/{name}.bin")
@@ -401,9 +665,16 @@ class StreamingRunManager:
             raw = {"min_gpus": world_size, "placement": "single_host", "parallelism": parallelism}
         return ResourceRequirements.from_dict(raw)
 
-    def emit_assignment_grant(self, manifest: JobManifestV3) -> None:
+    def emit_assignment_grant(self, manifest: JobManifestV3) -> str | None:
+        """Write the encrypted assignment grant; return its bucket URI (or None).
+
+        ``None`` is returned when ``grant_mode == "direct"`` (no grant broker)
+        so the queue entry's ``grant_uri`` field is left null and the miner
+        falls back to direct bucket access. The returned URI lets
+        :meth:`emit_job` record the grant location on the queue entry.
+        """
         if self.grant_broker is None:
-            return
+            return None
         now = int(time.time())
         receipt_uri = self.bucket.uri_for_key(
             paths.receipt_key(
@@ -436,10 +707,9 @@ class StreamingRunManager:
             )
         else:
             encrypted = self.assignment_crypto.encrypt_for_hotkey(grant, recipient_hotkey=manifest.assigned_hotkey)
-        self.bucket.put_json(
-            self.bucket.uri_for_key(paths.assignment_key(self.config.netuid, manifest.run_id, manifest.job_id, manifest.assigned_hotkey)),
-            encrypted.to_dict(),
-        )
+        grant_uri = self.bucket.uri_for_key(paths.assignment_key(self.config.netuid, manifest.run_id, manifest.job_id, manifest.assigned_hotkey))
+        self.bucket.put_json(grant_uri, encrypted.to_dict())
+        return grant_uri
 
     @staticmethod
     def output_grant_uris(manifest: JobManifestV3) -> list[str]:

@@ -3,7 +3,7 @@
 #
 #   1. Provision the Cloudflare Tunnel + DNS via setup_cloudflare_dashboard.py
 #      (idempotent; reuses an existing tunnel of the same name).
-#   2. SSH to the chosen host, write /root/teuton/.env, scp the compose file,
+#   2. SSH to the chosen host, write /root/teuton-dashboard/.env, scp the compose file,
 #      docker login, and `docker compose up -d` the dashboard stack.
 #
 # Usage:
@@ -182,12 +182,14 @@ push_inline() {
 }
 
 echo
+REMOTE_DIR="/root/teuton-dashboard"
+
 echo "=== deploying dashboard stack to $SSH_HOST:$SSH_PORT ==="
-remote "mkdir -p /root/teuton /root/.docker"
+remote "mkdir -p '$REMOTE_DIR' /root/.docker"
 
 remote "echo '$DOCKER_PAT' | docker login -u '$DOCKER_USER' --password-stdin"
 
-push_inline /root/teuton/.env 600 <<EOF
+push_inline "$REMOTE_DIR/.env" 600 <<EOF
 DOCKER_USER=$DOCKER_USER
 S3_BUCKET=$S3_BUCKET
 S3_REGION=${S3_REGION:-us-east-1}
@@ -198,8 +200,8 @@ TEUTON_NETUID=${TEUTON_NETUID:-3}
 TEUTON_RUN_ID=$TEUTON_RUN_ID
 TEUTON_DASHBOARD_TUNNEL_TOKEN=$TEUTON_DASHBOARD_TUNNEL_TOKEN
 TEUTON_DASHBOARD_REFRESH_SEC=${TEUTON_DASHBOARD_REFRESH_SEC:-3.0}
-TEUTON_DASHBOARD_MAX_JOBS=${TEUTON_DASHBOARD_MAX_JOBS:-500}
-TEUTON_DASHBOARD_MAX_ARTIFACTS=${TEUTON_DASHBOARD_MAX_ARTIFACTS:-300}
+TEUTON_DASHBOARD_MAX_JOBS=${TEUTON_DASHBOARD_MAX_JOBS:-200}
+TEUTON_MAX_INFLIGHT_PER_HOTKEY=${TEUTON_MAX_INFLIGHT_PER_HOTKEY:-8}
 TEUTON_DASHBOARD_DB_PATH=${TEUTON_DASHBOARD_DB_PATH:-/var/lib/teuton-dashboard/dashboard.sqlite3}
 TEUTON_DASHBOARD_BUCKET_POLL_SEC=${TEUTON_DASHBOARD_BUCKET_POLL_SEC:-5.0}
 TEUTON_DASHBOARD_CHAIN_POLL_SEC=${TEUTON_DASHBOARD_CHAIN_POLL_SEC:-30.0}
@@ -208,10 +210,10 @@ EOF
 
 scp "${SCP_OPTS[@]}" \
     "$REPO_ROOT/docker/compose.dashboard.yml" \
-    "$SSH_HOST:/root/teuton/compose.yml"
+    "$SSH_HOST:$REMOTE_DIR/compose.yml"
 
-remote "cd /root/teuton && docker compose pull && docker compose up -d"
-remote "cd /root/teuton && docker compose ps --format 'table {{.Service}}\t{{.State}}\t{{.Image}}'"
+remote "cd '$REMOTE_DIR' && docker compose pull && docker compose up -d"
+remote "cd '$REMOTE_DIR' && docker compose ps --format 'table {{.Service}}\t{{.State}}\t{{.Image}}'"
 
 echo
 echo "=================================================================="

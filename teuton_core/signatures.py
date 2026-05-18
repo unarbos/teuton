@@ -92,6 +92,13 @@ def verify_hotkey_payload(payload: bytes, identity: str, signature: str) -> bool
     """Verify a payload signed by the hotkey identified by an SS58 address."""
     sig = _signature_bytes(signature)
     try:
+        from bittensor_wallet import Keypair
+
+        if bool(Keypair(ss58_address=identity, crypto_type=1).verify(payload, sig)):
+            return True
+    except Exception:
+        pass
+    try:
         from substrateinterface import Keypair
 
         if bool(Keypair(ss58_address=identity).verify(payload, sig)):
@@ -188,3 +195,28 @@ class BittensorHotkeySigner:
             raise RuntimeError("wallet hotkey does not expose verify(payload, signature)")
         sig = _signature_bytes(signature)
         return bool(verifier(payload, sig))
+
+
+def load_wallet_hotkey_signer(
+    *,
+    wallet_path: str | Path,
+    wallet_name: str,
+    hotkey_name: str,
+) -> Signer:
+    """Load a signer from either Teuton's native ED25519 keyfile or bt.Wallet."""
+    try:
+        return NativeEd25519HotkeySigner.from_wallet(
+            wallet_path=wallet_path,
+            wallet_name=wallet_name,
+            hotkey_name=hotkey_name,
+        )
+    except ValueError:
+        pass
+
+    import bittensor as bt
+
+    try:
+        wallet = bt.Wallet(name=wallet_name, hotkey=hotkey_name, path=str(wallet_path))
+    except TypeError:
+        wallet = bt.Wallet(name=wallet_name, hotkey=hotkey_name)
+    return BittensorHotkeySigner(wallet=wallet)

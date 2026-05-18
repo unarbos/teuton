@@ -13,6 +13,18 @@ from teuton_runtime.storage import LocalBucket
 _RUN_COUNTER = itertools.count()
 
 
+@pytest.fixture(autouse=True)
+def _isolate_teuton_cache_dir(tmp_path, monkeypatch):
+    """Per-test ``TEUTON_CACHE_DIR`` so the miner's persisted ``completed_jobs``
+    cache from a previous test doesn't leak into the next one.
+
+    Without this, ``test-run-0`` reuses the on-disk cache that a previous
+    pytest invocation populated, and miners skip the new tests' jobs as
+    "already completed."
+    """
+    monkeypatch.setenv("TEUTON_CACHE_DIR", str(tmp_path / ".teuton-cache"))
+
+
 @pytest.fixture
 def local_bucket(tmp_path) -> LocalBucket:
     return LocalBucket(root=str(tmp_path), bucket="test-bucket")

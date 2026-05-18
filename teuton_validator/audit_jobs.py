@@ -22,6 +22,7 @@ from teuton_core.wallet_crypto import AssignmentEncryptor, DevAssignmentCrypto, 
 from teuton_orchestrator.scheduler import QuotaBook
 from teuton_runtime.discovery import build_discovery_backend
 from teuton_runtime.grants import broker_for_mode
+from teuton_runtime.queue import OrchestratorQueue, QueueEntry
 from teuton_runtime.storage import ObjectStore
 from .verifier import ValidatorConfig, ReplayVerifier
 
@@ -81,6 +82,19 @@ class AuditJobManager:
             if config.assignment_crypto == "ed25519"
             else None
         )
+        # Audit queue is a separate ``role="audit"`` snapshot at
+        # ``runs/{run_id}/queue/audit.json``. Auditor-eligible miners read
+        # it the same way training miners read the train queue.
+        self.queue = OrchestratorQueue(
+            bucket=bucket,
+            netuid=config.netuid,
+            run_id=config.run_id,
+            role="audit",
+            flush_interval_sec=0.5,
+        )
+        self.queue.reconcile_from_bucket()
+        # AuditJobManager is short-lived per ``run_once``, so we flush
+        # synchronously rather than running a background thread.
 
     def run_once(self, *, max_jobs: int | None = None) -> int:
         emitted = 0
@@ -95,16 +109,23 @@ class AuditJobManager:
                 sample_rate=self.config.sample_rate,
             ),
         )
-        for receipt_uri, receipt in verifier.sample_receipts():
-            if max_jobs is not None and emitted >= max_jobs:
-                break
-            if verifier.has_verdict(receipt) or verifier.find_audit_result(receipt) is not None:
-                continue
-            job_id = self.audit_job_id(receipt)
-            if self.bucket.exists(self.bucket.uri_for_key(paths.audit_job_manifest_key(self.config.netuid, self.config.run_id, job_id))):
-                continue
-            self.emit_audit_job(receipt_uri, receipt, verifier.find_manifest(receipt), job_id)
-            emitted += 1
+        try:
+            for receipt_uri, receipt in verifier.sample_receipts():
+                if max_jobs is not None and emitted >= max_jobs:
+                    break
+                if verifier.has_verdict(receipt) or verifier.find_audit_result(receipt) is not None:
+                    continue
+                job_id = self.audit_job_id(receipt)
+                if self.bucket.exists(self.bucket.uri_for_key(paths.audit_job_manifest_key(self.config.netuid, self.config.run_id, job_id))):
+                    continue
+                self.emit_audit_job(receipt_uri, receipt, verifier.find_manifest(receipt), job_id)
+                emitted += 1
+        finally:
+            # Publish the audit queue snapshot once for the whole run_once
+            # call instead of after each emit (smaller blast radius if a
+            # later emit fails).
+            if emitted > 0:
+                self.queue.flush(force=True)
         return emitted
 
     def discover_auditors(self) -> list[WorkerIdentity]:
@@ -143,17 +164,16 @@ class AuditJobManager:
             created_unix=int(time.time()),
             verification_policy=VerificationPolicy(critical=False),
         ).sign(self.config.owner_signer or self.config.owner_secret)
-        self.bucket.put_json(
-            self.bucket.uri_for_key(paths.audit_job_manifest_key(self.config.netuid, self.config.run_id, job_id)),
-            manifest.to_dict(),
-        )
-        self.emit_assignment_grant(manifest)
-        self.append_index(job_id)
+        manifest_uri = self.bucket.uri_for_key(paths.audit_job_manifest_key(self.config.netuid, self.config.run_id, job_id))
+        self.bucket.put_json(manifest_uri, manifest.to_dict())
+        grant_uri = self.emit_assignment_grant(manifest)
+        self.queue.add(QueueEntry.from_manifest(manifest, manifest_uri=manifest_uri, grant_uri=grant_uri))
         return manifest
 
-    def emit_assignment_grant(self, manifest: JobManifestV3) -> None:
+    def emit_assignment_grant(self, manifest: JobManifestV3) -> str | None:
+        """Write the encrypted audit grant; return its bucket URI (or None)."""
         if self.grant_broker is None:
-            return
+            return None
         now = int(time.time())
         grant = AssignmentGrantV3(
             job_id=manifest.job_id,
@@ -177,22 +197,11 @@ class AuditJobManager:
             )
         else:
             encrypted = self.assignment_crypto.encrypt_for_hotkey(grant, recipient_hotkey=manifest.assigned_hotkey)
-        self.bucket.put_json(
-            self.bucket.uri_for_key(
-                paths.audit_assignment_key(self.config.netuid, manifest.run_id, manifest.job_id, manifest.assigned_hotkey)
-            ),
-            encrypted.to_dict(),
+        grant_uri = self.bucket.uri_for_key(
+            paths.audit_assignment_key(self.config.netuid, manifest.run_id, manifest.job_id, manifest.assigned_hotkey)
         )
-
-    def append_index(self, job_id: str) -> None:
-        uri = self.bucket.uri_for_key(paths.audit_job_index_key(self.config.netuid, self.config.run_id))
-        try:
-            jobs = self.bucket.get_json(uri) if self.bucket.exists(uri) else []
-        except Exception:
-            jobs = []
-        if job_id not in jobs:
-            jobs.append(job_id)
-            self.bucket.put_json(uri, jobs)
+        self.bucket.put_json(grant_uri, encrypted.to_dict())
+        return grant_uri
 
     @staticmethod
     def unique_refs(refs: list[ArtifactRef]) -> list[ArtifactRef]:

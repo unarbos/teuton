@@ -42,12 +42,26 @@ def job_manifest_key(netuid: int, run_id: str, job_id: str) -> str:
     return f"{jobs_prefix(netuid, run_id)}{job_id}/manifest.json"
 
 
-def job_index_key(netuid: int, run_id: str) -> str:
-    return f"{jobs_prefix(netuid, run_id)}index.json"
+def queue_key(netuid: int, run_id: str, role: str = "train") -> str:
+    """Path of the orchestrator-owned outstanding-work queue.
 
+    There is one queue per ``(netuid, run_id, role)``: ``role="train"`` is
+    written by the streaming/run-manager orchestrator; ``role="audit"`` is
+    written by ``AuditJobManager``. The file body is a small JSON document
+    (see :mod:`teuton_runtime.queue` for the schema) containing only the
+    currently-outstanding entries, so the file is bounded by active work
+    rather than by emission history.
 
-def job_step_index_key(netuid: int, run_id: str, step_id: int) -> str:
-    return f"{jobs_prefix(netuid, run_id)}step={step_id}/index.json"
+    Lives under ``jobs/`` (not ``runs/``) so it lands inside the
+    publicly-readable bucket-policy allowlist (``v3/netuid=*/jobs/*`` and
+    ``v3/netuid=*/audits/*/jobs/*``). Miners running without S3 credentials
+    therefore read it via the bucket's public GET path.
+    """
+    if role == "train":
+        return f"{jobs_prefix(netuid, run_id)}queue.json"
+    if role == "audit":
+        return f"{audit_jobs_prefix(netuid, run_id)}queue.json"
+    raise ValueError(f"queue_key: unknown role {role!r}")
 
 
 def assignment_key(netuid: int, run_id: str, job_id: str, hotkey: str) -> str:
@@ -126,10 +140,6 @@ def audit_job_manifest_key(netuid: int, run_id: str, job_id: str) -> str:
     return f"{audit_jobs_prefix(netuid, run_id)}{job_id}/manifest.json"
 
 
-def audit_job_index_key(netuid: int, run_id: str) -> str:
-    return f"{audit_jobs_prefix(netuid, run_id)}index.json"
-
-
 def audit_assignment_key(netuid: int, run_id: str, job_id: str, auditor_hotkey: str) -> str:
     return f"{audit_root(netuid, run_id)}/assignments/{job_id}/hotkey={auditor_hotkey}.json"
 
@@ -148,7 +158,11 @@ def scores_key(netuid: int, window_id: str) -> str:
 
 
 def run_prefixes(netuid: int, run_id: str) -> list[str]:
-    """All v3 prefixes owned by a run, for teardown and lifecycle tooling."""
+    """All v3 prefixes owned by a run, for teardown and lifecycle tooling.
+
+    ``run_root(...) + "/"`` already covers the per-run queue files at
+    ``runs/{run_id}/queue/{role}.json`` so we don't list them separately.
+    """
     return [
         run_root(netuid, run_id) + "/",
         jobs_prefix(netuid, run_id),

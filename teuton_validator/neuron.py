@@ -6,7 +6,7 @@ import os
 import time
 from dataclasses import asdict, dataclass, field
 
-from teuton_core.signatures import NativeEd25519HotkeySigner
+from teuton_core.signatures import load_wallet_hotkey_signer
 from teuton_core.telemetry import TelemetryWriter
 from teuton_runtime.storage import ObjectStore
 from .subnet import BittensorAdapter, WeightUpdate
@@ -43,7 +43,7 @@ class ValidatorNeuron:
         self.config = config
         validator_signer = None
         if config.wallet_name and config.hotkey_name:
-            validator_signer = NativeEd25519HotkeySigner.from_wallet(
+            validator_signer = load_wallet_hotkey_signer(
                 wallet_path=config.wallet_path,
                 wallet_name=config.wallet_name,
                 hotkey_name=config.hotkey_name,

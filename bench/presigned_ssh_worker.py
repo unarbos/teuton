@@ -23,6 +23,7 @@ from teuton_core.wallet_crypto import DevAssignmentCrypto, Ed25519SealedBoxAssig
 from teuton_runtime.discovery import build_discovery_backend
 from teuton_runtime.distributed_executor import DistributedJobExecutor
 from teuton_runtime.executor import JobExecutor
+from teuton_runtime.queue import read_queue
 from teuton_runtime.storage import ObjectStore
 from teuton_runtime.transport import PresignedArtifactTransport
 from teuton_validator.audit import AuditReplayConfig, AuditReplayRunner
@@ -142,20 +143,18 @@ def decrypt_grant(
 
 
 def eligible_jobs(bucket: ObjectStore, *, netuid: int, run_id: str, worker: WorkerIdentity, role: str = "train") -> list[JobManifestV3]:
-    index_key = paths.audit_job_index_key(netuid, run_id) if role == "audit" else paths.job_index_key(netuid, run_id)
-    index_uri = bucket.uri_for_key(index_key)
-    if not bucket.exists(index_uri):
+    state = read_queue(bucket, netuid=netuid, run_id=run_id, role=role)
+    if state is None:
         return []
     out: list[JobManifestV3] = []
-    for job_id in bucket.get_json(index_uri):
-        manifest_key = paths.audit_job_manifest_key(netuid, run_id, job_id) if role == "audit" else paths.job_manifest_key(netuid, run_id, job_id)
-        manifest_uri = bucket.uri_for_key(manifest_key)
-        if not bucket.exists(manifest_uri):
+    for entry in state.outstanding:
+        if entry.assigned_hotkey != worker.hotkey_ss58:
             continue
-        manifest = JobManifestV3.from_dict(bucket.get_json(manifest_uri))
-        if manifest.assigned_hotkey != worker.hotkey_ss58:
+        if entry.assigned_worker not in (None, "", worker.worker_id):
             continue
-        if manifest.assigned_worker not in (None, worker.worker_id):
+        try:
+            manifest = JobManifestV3.from_dict(bucket.get_json(entry.manifest_uri))
+        except Exception:
             continue
         if manifest.resource_requirements.min_gpus > max(1, len(worker.device_group)):
             continue

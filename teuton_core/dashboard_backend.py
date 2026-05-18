@@ -1,14 +1,19 @@
 """SQLite-backed dashboard backend for Teuton.
 
-The legacy discovery UI built each ``/api/snapshot`` response by synchronously
-walking S3. That is fine for tiny local smoke runs, but live buckets can contain
-enough objects that a browser times out before the response is ready. This
-module moves the expensive work into background indexer threads:
+Two-tier data sourcing:
 
-* bucket indexer: S3 heartbeats, manifests, receipts, verdicts, audit results
-* chain indexer: Bittensor metagraph/current-block hotkey state
+- **Outstanding work** comes from the orchestrator's :mod:`teuton_runtime.queue`
+  snapshot (``v3/.../runs/{run_id}/queue/{role}.json``). The dashboard reads it
+  live on every ``/api/snapshot`` and every ``/api/queue`` -- it's a single
+  small object that updates ~every 0.5s in production.
+- **Receipts / verdicts / audits / heartbeats / chain** stay in SQLite,
+  indexed by background loops, since those prefixes are not bounded by the
+  queue model. Completed jobs are derived from receipts JOIN verdicts at
+  query time; there is no longer a per-job SQLite table.
 
-Request handlers only read SQLite and serialize pre-indexed rows.
+Queue-depth history (last 30 min) is kept in a module-level in-memory ring
+buffer keyed by ``(netuid, run_id, role)`` -- sampled at the bucket indexer
+cadence. It's transient: dashboard restart loses history, which is fine.
 """
 from __future__ import annotations
 
@@ -19,7 +24,8 @@ import threading
 import time
 import traceback
 import webbrowser
-from dataclasses import dataclass
+from collections import deque
+from dataclasses import dataclass, field
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -30,10 +36,28 @@ from teuton_core import paths
 from teuton_core.discovery_ui import INDEX_HTML, _load_logo_bytes
 from teuton_core.protocol import AuditResultV3, JobManifestV3, JobReceiptV3, VerificationVerdictV3
 from teuton_runtime.discovery import scan_bucket_discovery_records
+from teuton_runtime.queue import QueueState, read_queue
 from teuton_runtime.storage import ObjectStore
 
 
-@dataclass(frozen=True)
+# Default per-hotkey queue cap. Mirrors ``TEUTON_MAX_INFLIGHT_PER_HOTKEY`` on
+# the orchestrator -- set the same env on the dashboard host so the "at-cap"
+# threshold reflects reality. We default to 8 to match the orchestrator's
+# default; a value of 0 means "unknown / unbounded" and disables backpressure
+# rendering on the UI.
+_DEFAULT_MAX_INFLIGHT = int(os.environ.get("TEUTON_MAX_INFLIGHT_PER_HOTKEY", "8"))
+
+# Queue-depth ring buffer parameters. 30 min @ 5s = 360 samples per stream.
+_QUEUE_HISTORY_SECONDS = 30 * 60
+_QUEUE_HISTORY_MAX_POINTS = 400
+
+# Per-(netuid, run_id, role) -> deque[QueueHistoryPoint]. Module-level so
+# samples survive across requests; reset on dashboard restart.
+_QUEUE_HISTORY: dict[tuple[int, str, str], deque] = {}
+_QUEUE_HISTORY_LOCK = threading.Lock()
+
+
+@dataclass(frozen=False)
 class DashboardConfig:
     netuid: int
     run_id: str | None = None
@@ -42,12 +66,64 @@ class DashboardConfig:
     port: int = 8765
     refresh_sec: float = 3.0
     heartbeat_ttl_sec: float | None = 30.0
-    max_jobs: int = 500
-    max_artifacts: int = 300
+    # Completed-jobs window. Outstanding work is bounded by the orchestrator
+    # queue itself, so we no longer need a generous floor here.
+    max_jobs: int = 200
     bucket_poll_sec: float = 5.0
     chain_poll_sec: float = 30.0
     network: str = "finney"
     open_browser: bool = False
+    # Per-hotkey queue cap mirrored from the orchestrator. Used for "at-cap"
+    # detection and the per-miner inflight bar; 0 disables the indicator.
+    max_inflight_per_hotkey: int = _DEFAULT_MAX_INFLIGHT
+
+    def __post_init__(self) -> None:
+        if self.max_jobs < 50:
+            self.max_jobs = 50
+
+
+@dataclass(frozen=True)
+class QueueHistoryPoint:
+    ts: int
+    depth_total: int
+    at_cap_count: int
+
+
+@dataclass(frozen=True)
+class QueueSnapshot:
+    """Live view of one ``(run_id, role)`` queue."""
+
+    run_id: str
+    role: str
+    snapshot_unix: int
+    snapshot_id: int
+    depth_total: int
+    depth_by_hotkey: dict[str, int]
+    max_inflight_per_hotkey: int
+    at_cap_count: int
+    at_cap_hotkeys: list[str]
+    oldest_entry_age_sec: float | None
+    oldest_job_id: str | None
+    history: list[QueueHistoryPoint] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "run_id": self.run_id,
+            "role": self.role,
+            "snapshot_unix": int(self.snapshot_unix),
+            "snapshot_id": int(self.snapshot_id),
+            "depth_total": int(self.depth_total),
+            "depth_by_hotkey": dict(self.depth_by_hotkey),
+            "max_inflight_per_hotkey": int(self.max_inflight_per_hotkey),
+            "at_cap_count": int(self.at_cap_count),
+            "at_cap_hotkeys": list(self.at_cap_hotkeys),
+            "oldest_entry_age_sec": self.oldest_entry_age_sec,
+            "oldest_job_id": self.oldest_job_id,
+            "history": [
+                {"ts": p.ts, "depth_total": p.depth_total, "at_cap_count": p.at_cap_count}
+                for p in self.history
+            ],
+        }
 
 
 class DashboardDB:
@@ -66,6 +142,21 @@ class DashboardDB:
 
     def _init(self) -> None:
         with self._lock, self.connect() as conn:
+            # The legacy ``jobs`` table is intentionally NOT created. Outstanding
+            # work comes from the orchestrator queue (live bucket read); completed
+            # work is reconstructed from receipts JOIN verdicts. We DROP any
+            # leftover ``jobs`` table from older deployments so the schema stays
+            # consistent with the new design.
+            conn.execute("DROP TABLE IF EXISTS jobs")
+            # Migrate existing receipts table to add the ``kind`` column we
+            # now project onto completed jobs. ADD COLUMN is idempotent only
+            # if we guard on existence.
+            try:
+                cols = {row[1] for row in conn.execute("PRAGMA table_info(receipts)").fetchall()}
+                if cols and "kind" not in cols:
+                    conn.execute("ALTER TABLE receipts ADD COLUMN kind TEXT")
+            except Exception:
+                pass
             conn.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS runs (
@@ -73,7 +164,6 @@ class DashboardDB:
                     run_id TEXT NOT NULL,
                     first_seen_unix INTEGER,
                     last_seen_unix INTEGER,
-                    job_count INTEGER DEFAULT 0,
                     receipt_count INTEGER DEFAULT 0,
                     PRIMARY KEY (netuid, run_id)
                 );
@@ -91,20 +181,6 @@ class DashboardDB:
                     worker_json TEXT,
                     PRIMARY KEY (netuid, run_id, hotkey, worker_id, role)
                 );
-                CREATE TABLE IF NOT EXISTS jobs (
-                    netuid INTEGER NOT NULL,
-                    run_id TEXT NOT NULL,
-                    job_id TEXT NOT NULL,
-                    kind TEXT,
-                    status TEXT,
-                    assigned_hotkey TEXT,
-                    assigned_worker TEXT,
-                    created_unix INTEGER,
-                    deadline_unix INTEGER,
-                    role TEXT,
-                    manifest_json TEXT,
-                    PRIMARY KEY (netuid, run_id, job_id)
-                );
                 CREATE TABLE IF NOT EXISTS receipts (
                     netuid INTEGER NOT NULL,
                     run_id TEXT NOT NULL,
@@ -112,6 +188,7 @@ class DashboardDB:
                     job_id TEXT,
                     hotkey TEXT,
                     worker_id TEXT,
+                    kind TEXT,
                     compute_sec REAL,
                     bytes_read INTEGER,
                     bytes_written INTEGER,
@@ -168,8 +245,10 @@ class DashboardDB:
                     updated_unix INTEGER,
                     error TEXT
                 );
-                CREATE INDEX IF NOT EXISTS idx_jobs_run_created ON jobs(netuid, run_id, created_unix DESC);
+                CREATE INDEX IF NOT EXISTS idx_receipts_run_finished ON receipts(netuid, run_id, finished_unix DESC);
                 CREATE INDEX IF NOT EXISTS idx_receipts_run_job ON receipts(netuid, run_id, job_id);
+                CREATE INDEX IF NOT EXISTS idx_verdicts_run_job ON verdicts(netuid, run_id, job_id);
+                CREATE INDEX IF NOT EXISTS idx_audits_run_job ON audits(netuid, run_id, job_id);
                 CREATE INDEX IF NOT EXISTS idx_workers_run ON workers(netuid, run_id);
                 """
             )
@@ -202,6 +281,11 @@ class DashboardDB:
         )
 
 
+# ---------------------------------------------------------------------------
+# Server lifecycle
+# ---------------------------------------------------------------------------
+
+
 def serve_dashboard_backend(*, bucket: ObjectStore, config: DashboardConfig) -> None:
     db = DashboardDB(config.db_path)
     stop = threading.Event()
@@ -212,7 +296,7 @@ def serve_dashboard_backend(*, bucket: ObjectStore, config: DashboardConfig) -> 
     for thread in threads:
         thread.start()
 
-    handler = _handler(db=db, config=config)
+    handler = _handler(bucket=bucket, db=db, config=config)
     server = ThreadingHTTPServer((config.host, int(config.port)), handler)
     url = f"http://{config.host}:{config.port}/"
     print(
@@ -258,6 +342,11 @@ def _chain_loop(db: DashboardDB, config: DashboardConfig, stop: threading.Event)
         stop.wait(config.chain_poll_sec)
 
 
+# ---------------------------------------------------------------------------
+# Indexers
+# ---------------------------------------------------------------------------
+
+
 def index_bucket_once(*, bucket: ObjectStore, db: DashboardDB, config: DashboardConfig) -> int:
     now = int(time.time())
     run_ids = _selected_run_ids(bucket, config)
@@ -265,10 +354,13 @@ def index_bucket_once(*, bucket: ObjectStore, db: DashboardDB, config: Dashboard
     for run_id in run_ids:
         _upsert_run(db, config.netuid, run_id, now)
         indexed += _index_workers(bucket, db, config, run_id)
-        indexed += _index_jobs(bucket, db, config, run_id)
         indexed += _index_receipts(bucket, db, config, run_id)
         indexed += _index_verdicts(bucket, db, config, run_id)
         indexed += _index_audits(bucket, db, config, run_id)
+        # Sample the queue snapshot into the in-memory ring buffer so the UI
+        # can render a 30-min depth timeseries.
+        _sample_queue_history(bucket, config, run_id, role="train", now_unix=now)
+        _sample_queue_history(bucket, config, run_id, role="audit", now_unix=now)
         _refresh_run_counts(db, config.netuid, run_id)
     return indexed
 
@@ -340,53 +432,6 @@ def _index_workers(bucket: ObjectStore, db: DashboardDB, config: DashboardConfig
     return len(rows)
 
 
-def _index_jobs(bucket: ObjectStore, db: DashboardDB, config: DashboardConfig, run_id: str) -> int:
-    rows: list[tuple[Any, ...]] = []
-    seen: set[str] = set()
-    for role, index_key, prefix, manifest_key in (
-        ("train", paths.job_index_key(config.netuid, run_id), paths.jobs_prefix(config.netuid, run_id), paths.job_manifest_key),
-        ("audit", paths.audit_job_index_key(config.netuid, run_id), paths.audit_jobs_prefix(config.netuid, run_id), paths.audit_job_manifest_key),
-    ):
-        for job_id in _job_ids(bucket, index_key, prefix)[: config.max_jobs]:
-            if job_id in seen:
-                continue
-            manifest = _load_manifest(bucket, bucket.uri_for_key(manifest_key(config.netuid, run_id, job_id)))
-            if manifest is None:
-                continue
-            seen.add(manifest.job_id)
-            rows.append(
-                (
-                    config.netuid,
-                    run_id,
-                    manifest.job_id,
-                    manifest.kind,
-                    "created",
-                    manifest.assigned_hotkey,
-                    manifest.assigned_worker,
-                    int(manifest.created_unix or 0),
-                    int(manifest.deadline_unix or 0),
-                    role,
-                    json.dumps(manifest.to_dict(), sort_keys=True),
-                )
-            )
-    db.executemany(
-        """
-        INSERT INTO jobs(netuid, run_id, job_id, kind, status, assigned_hotkey, assigned_worker, created_unix, deadline_unix, role, manifest_json)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(netuid, run_id, job_id) DO UPDATE SET
-            kind=excluded.kind,
-            assigned_hotkey=excluded.assigned_hotkey,
-            assigned_worker=excluded.assigned_worker,
-            created_unix=excluded.created_unix,
-            deadline_unix=excluded.deadline_unix,
-            role=excluded.role,
-            manifest_json=excluded.manifest_json
-        """,
-        rows,
-    )
-    return len(rows)
-
-
 def _index_receipts(bucket: ObjectStore, db: DashboardDB, config: DashboardConfig, run_id: str) -> int:
     rows: list[tuple[Any, ...]] = []
     for uri in bucket.list(bucket.uri_for_key(paths.receipts_prefix(config.netuid, run_id)))[: max(config.max_jobs * 4, 500)]:
@@ -404,6 +449,7 @@ def _index_receipts(bucket: ObjectStore, db: DashboardDB, config: DashboardConfi
                 receipt.job_id,
                 receipt.worker.hotkey_ss58,
                 receipt.worker.worker_id,
+                _receipt_kind(receipt),
                 float(receipt.compute_sec or 0.0),
                 int(receipt.claimed_bytes_read or 0),
                 int(receipt.claimed_bytes_written or 0),
@@ -413,12 +459,13 @@ def _index_receipts(bucket: ObjectStore, db: DashboardDB, config: DashboardConfi
         )
     db.executemany(
         """
-        INSERT INTO receipts(netuid, run_id, receipt_id, job_id, hotkey, worker_id, compute_sec, bytes_read, bytes_written, finished_unix, receipt_json)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO receipts(netuid, run_id, receipt_id, job_id, hotkey, worker_id, kind, compute_sec, bytes_read, bytes_written, finished_unix, receipt_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(netuid, run_id, receipt_id) DO UPDATE SET
             job_id=excluded.job_id,
             hotkey=excluded.hotkey,
             worker_id=excluded.worker_id,
+            kind=excluded.kind,
             compute_sec=excluded.compute_sec,
             bytes_read=excluded.bytes_read,
             bytes_written=excluded.bytes_written,
@@ -428,6 +475,22 @@ def _index_receipts(bucket: ObjectStore, db: DashboardDB, config: DashboardConfi
         rows,
     )
     return len(rows)
+
+
+def _receipt_kind(receipt: JobReceiptV3) -> str:
+    """Extract job ``kind`` from a receipt, falling back to ``""``.
+
+    Receipts don't always carry the manifest kind directly; the executor
+    serialises it onto the receipt for v3. Older receipts may be missing it.
+    """
+    raw = getattr(receipt, "kind", None)
+    if raw:
+        return str(raw)
+    # Some receipt schemas keep the kind inside the worker_report dict.
+    report = getattr(receipt, "worker_report", None) or {}
+    if isinstance(report, dict):
+        return str(report.get("kind") or "")
+    return ""
 
 
 def _index_verdicts(bucket: ObjectStore, db: DashboardDB, config: DashboardConfig, run_id: str) -> int:
@@ -506,11 +569,10 @@ def _refresh_run_counts(db: DashboardDB, netuid: int, run_id: str) -> None:
     db.execute(
         """
         UPDATE runs SET
-            job_count=(SELECT COUNT(*) FROM jobs WHERE netuid=? AND run_id=?),
             receipt_count=(SELECT COUNT(*) FROM receipts WHERE netuid=? AND run_id=?)
         WHERE netuid=? AND run_id=?
         """,
-        (netuid, run_id, netuid, run_id, netuid, run_id),
+        (netuid, run_id, netuid, run_id),
     )
 
 
@@ -577,7 +639,177 @@ def index_chain_once(*, db: DashboardDB, config: DashboardConfig) -> None:
     db.set_state("chain", cursor={"current_block": current_block, "hotkeys": len(rows)}, error=None)
 
 
-def _handler(*, db: DashboardDB, config: DashboardConfig) -> type[BaseHTTPRequestHandler]:
+# ---------------------------------------------------------------------------
+# Queue snapshot + history
+# ---------------------------------------------------------------------------
+
+
+def _sample_queue_history(
+    bucket: ObjectStore,
+    config: DashboardConfig,
+    run_id: str,
+    *,
+    role: str,
+    now_unix: int,
+) -> None:
+    """Record one queue history point if the queue object exists.
+
+    Best-effort: missing/unreadable queue objects are silently skipped so a
+    brand-new run that hasn't published a snapshot yet doesn't fill the log.
+    """
+    try:
+        state = read_queue(bucket, netuid=config.netuid, run_id=run_id, role=role)
+    except Exception:
+        return
+    if state is None:
+        return
+    snap = _queue_state_to_snapshot(state, run_id=run_id, role=role, config=config, history=[])
+    key = (config.netuid, run_id, role)
+    with _QUEUE_HISTORY_LOCK:
+        buf = _QUEUE_HISTORY.get(key)
+        if buf is None:
+            buf = deque(maxlen=_QUEUE_HISTORY_MAX_POINTS)
+            _QUEUE_HISTORY[key] = buf
+        buf.append(QueueHistoryPoint(ts=int(now_unix), depth_total=snap.depth_total, at_cap_count=snap.at_cap_count))
+
+
+def _queue_history_for(netuid: int, run_id: str, role: str, *, now_unix: int) -> list[QueueHistoryPoint]:
+    cutoff = int(now_unix) - _QUEUE_HISTORY_SECONDS
+    with _QUEUE_HISTORY_LOCK:
+        buf = _QUEUE_HISTORY.get((netuid, run_id, role))
+        if not buf:
+            return []
+        return [p for p in buf if p.ts >= cutoff]
+
+
+def _queue_state_to_snapshot(
+    state: QueueState,
+    *,
+    run_id: str,
+    role: str,
+    config: DashboardConfig,
+    history: list[QueueHistoryPoint],
+) -> QueueSnapshot:
+    depth_by_hotkey: dict[str, int] = {}
+    now = time.time()
+    oldest_age: float | None = None
+    oldest_job_id: str | None = None
+    for entry in state.outstanding:
+        depth_by_hotkey[entry.assigned_hotkey] = depth_by_hotkey.get(entry.assigned_hotkey, 0) + 1
+        if entry.created_unix:
+            age = max(0.0, now - float(entry.created_unix))
+            if oldest_age is None or age > oldest_age:
+                oldest_age = age
+                oldest_job_id = entry.job_id
+    cap = max(0, int(config.max_inflight_per_hotkey))
+    at_cap_hotkeys = (
+        sorted(hk for hk, n in depth_by_hotkey.items() if cap and n >= cap)
+        if cap
+        else []
+    )
+    return QueueSnapshot(
+        run_id=run_id,
+        role=role,
+        snapshot_unix=int(state.snapshot_unix),
+        snapshot_id=int(state.snapshot_id),
+        depth_total=len(state.outstanding),
+        depth_by_hotkey=depth_by_hotkey,
+        max_inflight_per_hotkey=cap,
+        at_cap_count=len(at_cap_hotkeys),
+        at_cap_hotkeys=at_cap_hotkeys,
+        oldest_entry_age_sec=oldest_age,
+        oldest_job_id=oldest_job_id,
+        history=history,
+    )
+
+
+def _queue_snapshot(
+    bucket: ObjectStore,
+    config: DashboardConfig,
+    *,
+    run_id: str,
+    role: str = "train",
+    include_history: bool = True,
+) -> QueueSnapshot:
+    """Live read of the queue, returning an empty snapshot when missing."""
+    state = None
+    try:
+        state = read_queue(bucket, netuid=config.netuid, run_id=run_id, role=role)
+    except Exception:
+        state = None
+    history = _queue_history_for(config.netuid, run_id, role, now_unix=int(time.time())) if include_history else []
+    if state is None:
+        return QueueSnapshot(
+            run_id=run_id,
+            role=role,
+            snapshot_unix=0,
+            snapshot_id=0,
+            depth_total=0,
+            depth_by_hotkey={},
+            max_inflight_per_hotkey=max(0, int(config.max_inflight_per_hotkey)),
+            at_cap_count=0,
+            at_cap_hotkeys=[],
+            oldest_entry_age_sec=None,
+            oldest_job_id=None,
+            history=history,
+        )
+    return _queue_state_to_snapshot(state, run_id=run_id, role=role, config=config, history=history)
+
+
+def _queue_outstanding_entries(bucket: ObjectStore, config: DashboardConfig, *, run_id: str, role: str = "train") -> list[dict[str, Any]]:
+    """Project queue entries into the dashboard's outstanding-job rows."""
+    try:
+        state = read_queue(bucket, netuid=config.netuid, run_id=run_id, role=role)
+    except Exception:
+        return []
+    if state is None:
+        return []
+    now = time.time()
+    out: list[dict[str, Any]] = []
+    for entry in state.outstanding:
+        out.append(
+            {
+                "job_id": entry.job_id,
+                "kind": _kind_from_job_id(entry.job_id),
+                "assigned_hotkey": entry.assigned_hotkey,
+                "assigned_worker": entry.assigned_worker,
+                "attempt": entry.attempt,
+                "created_unix": entry.created_unix,
+                "deadline_unix": entry.deadline_unix,
+                "age_sec": max(0.0, now - float(entry.created_unix)) if entry.created_unix else None,
+                "deadline_sec": (entry.deadline_unix - now) if entry.deadline_unix else None,
+                "manifest_uri": entry.manifest_uri,
+                "grant_uri": entry.grant_uri,
+                "role": role,
+            }
+        )
+    out.sort(key=lambda r: r.get("created_unix") or 0, reverse=True)
+    return out
+
+
+def _kind_from_job_id(job_id: str) -> str:
+    """Cheap kind inference from job_id naming convention.
+
+    Avoids fetching every manifest just to know the kind. Falls back to ``""``
+    so the UI just shows a blank kind cell rather than crashing.
+    """
+    if not job_id:
+        return ""
+    # Stress / training mode IDs look like ``j-e{epoch}-s{stage}-mb{mb}-fwd``.
+    for suffix in ("-fwd", "-bwd", "-outer", "-reduce", "-inner", "-eval"):
+        if job_id.endswith(suffix):
+            return "pipe_" + suffix.lstrip("-") if suffix in ("-fwd", "-bwd", "-outer") else suffix.lstrip("-")
+    if job_id.startswith("audit-"):
+        return "audit_replay"
+    return ""
+
+
+# ---------------------------------------------------------------------------
+# HTTP handler
+# ---------------------------------------------------------------------------
+
+
+def _handler(*, bucket: ObjectStore, db: DashboardDB, config: DashboardConfig) -> type[BaseHTTPRequestHandler]:
     logo_bytes = _load_logo_bytes()
 
     class DashboardHandler(BaseHTTPRequestHandler):
@@ -600,14 +832,14 @@ def _handler(*, db: DashboardDB, config: DashboardConfig) -> type[BaseHTTPReques
                 if parsed.path == "/api/discovery":
                     self._send_json(_api_discovery(db, config, query))
                     return
+                if parsed.path == "/api/queue":
+                    self._send_json(_api_queue(bucket, db, config, query))
+                    return
                 if parsed.path == "/api/snapshot":
-                    self._send_json(_api_snapshot(db, config, query))
+                    self._send_json(_api_snapshot(bucket, db, config, query))
                     return
                 if parsed.path == "/api/job":
-                    self._send_json(_api_job(db, config, query))
-                    return
-                if parsed.path == "/api/artifact":
-                    self._send_json({"uri": _first(query, "uri") or "", "exists": None, "source": "sqlite_backend"})
+                    self._send_json(_api_job(bucket, db, config, query))
                     return
                 if parsed.path == "/api/chain/meta":
                     self._send_json(_api_chain_meta(db, config))
@@ -637,6 +869,11 @@ def _handler(*, db: DashboardDB, config: DashboardConfig) -> type[BaseHTTPReques
     return DashboardHandler
 
 
+# ---------------------------------------------------------------------------
+# API handlers
+# ---------------------------------------------------------------------------
+
+
 def _health(db: DashboardDB, config: DashboardConfig) -> dict[str, Any]:
     states = {r["name"]: dict(r) for r in db.query("SELECT * FROM indexer_state")}
     chain = _row_dict_one(db.query("SELECT * FROM chain_meta WHERE netuid=?", (config.netuid,)))
@@ -644,11 +881,11 @@ def _health(db: DashboardDB, config: DashboardConfig) -> dict[str, Any]:
 
 
 def _api_runs(db: DashboardDB, config: DashboardConfig) -> dict[str, Any]:
-    rows = db.query("SELECT run_id FROM runs WHERE netuid=? ORDER BY last_seen_unix DESC, run_id DESC LIMIT 100", (config.netuid,))
-    runs = [r["run_id"] for r in rows]
-    # Empty default means "full-network view". A specific run_id can still be
-    # selected by passing ?run_id=... or starting the backend with --run-id.
-    return {"runs": runs, "default_run_id": config.run_id or ""}
+    rows = db.query(
+        "SELECT run_id FROM runs WHERE netuid=? ORDER BY last_seen_unix DESC, run_id DESC LIMIT 100",
+        (config.netuid,),
+    )
+    return {"runs": [r["run_id"] for r in rows], "default_run_id": config.run_id or ""}
 
 
 def _api_discovery(db: DashboardDB, config: DashboardConfig, query: dict[str, list[str]]) -> dict[str, Any]:
@@ -678,13 +915,29 @@ def _api_discovery(db: DashboardDB, config: DashboardConfig, query: dict[str, li
     }
 
 
-def _api_snapshot(db: DashboardDB, config: DashboardConfig, query: dict[str, list[str]]) -> dict[str, Any]:
+def _api_queue(bucket: ObjectStore, db: DashboardDB, config: DashboardConfig, query: dict[str, list[str]]) -> dict[str, Any]:
+    run_id = _selected_run(db, config, query) or ""
+    role = _first(query, "role") or "train"
+    if role not in ("train", "audit"):
+        role = "train"
+    if not run_id:
+        return {"queue": None, "meta": {"netuid": config.netuid, "run_id": "", "role": role}}
+    snap = _queue_snapshot(bucket, config, run_id=run_id, role=role)
+    return {
+        "queue": snap.to_dict(),
+        "meta": {"netuid": config.netuid, "run_id": run_id, "role": role, "generated_unix": int(time.time())},
+    }
+
+
+def _api_snapshot(bucket: ObjectStore, db: DashboardDB, config: DashboardConfig, query: dict[str, list[str]]) -> dict[str, Any]:
     run_id = _selected_run(db, config, query)
     now = time.time()
-    machines = _machines_from_sql(db, config, run_id, now=now)
-    jobs = _jobs_from_sql(db, config, run_id)
-    artifacts: list[dict[str, Any]] = []
-    summary = _summary(machines=machines, jobs=jobs, artifacts=artifacts)
+    queue_snap = _queue_snapshot(bucket, config, run_id=run_id, role="train") if run_id else None
+    audit_queue = _queue_snapshot(bucket, config, run_id=run_id, role="audit", include_history=False) if run_id else None
+    machines = _machines_from_sql(db, config, run_id, queue_snap=queue_snap, now=now)
+    outstanding = _queue_outstanding_entries(bucket, config, run_id=run_id, role="train") if run_id else []
+    audit_outstanding = _queue_outstanding_entries(bucket, config, run_id=run_id, role="audit") if run_id else []
+    completed = _completed_jobs_from_sql(db, config, run_id, limit=config.max_jobs)
     return {
         "meta": {
             "bucket": os.environ.get("S3_BUCKET", ""),
@@ -692,35 +945,67 @@ def _api_snapshot(db: DashboardDB, config: DashboardConfig, query: dict[str, lis
             "run_id": run_id or "all",
             "generated_unix": int(now),
             "max_jobs": config.max_jobs,
-            "max_artifacts": config.max_artifacts,
+            "max_inflight_per_hotkey": config.max_inflight_per_hotkey,
             "heartbeat_ttl_sec": config.heartbeat_ttl_sec,
             "source": "sqlite",
             "health": _health(db, config),
         },
         "run": {"run_id": run_id or "all"},
+        "queue": queue_snap.to_dict() if queue_snap else None,
+        "audit_queue": audit_queue.to_dict() if audit_queue else None,
         "machines": machines,
-        "jobs": jobs,
-        "artifacts": artifacts,
-        "edges": [],
-        "summary": summary,
+        "jobs": {
+            "outstanding": outstanding,
+            "completed": completed,
+            "audit_outstanding": audit_outstanding,
+        },
     }
 
 
-def _api_job(db: DashboardDB, config: DashboardConfig, query: dict[str, list[str]]) -> dict[str, Any]:
+def _api_job(bucket: ObjectStore, db: DashboardDB, config: DashboardConfig, query: dict[str, list[str]]) -> dict[str, Any]:
     run_id = _selected_run(db, config, query)
     job_id = _first(query, "job_id") or ""
-    if run_id is None:
+    if not job_id:
+        return {"meta": {"netuid": config.netuid, "run_id": run_id or "all"}, "job": None, "manifest": None}
+
+    # Try to locate the run if not explicit: pick the most recent receipt for this job_id.
+    resolved_run = run_id
+    if resolved_run is None:
         rows = db.query(
-            "SELECT manifest_json, run_id FROM jobs WHERE netuid=? AND job_id=? ORDER BY created_unix DESC LIMIT 1",
+            "SELECT run_id FROM receipts WHERE netuid=? AND job_id=? ORDER BY finished_unix DESC LIMIT 1",
             (config.netuid, job_id),
         )
-        row_run = rows[0]["run_id"] if rows else ""
-    else:
-        rows = db.query("SELECT manifest_json, run_id FROM jobs WHERE netuid=? AND run_id=? AND job_id=?", (config.netuid, run_id, job_id))
-        row_run = run_id
-    manifest = json.loads(rows[0]["manifest_json"]) if rows else None
-    job = next((j for j in _jobs_from_sql(db, config, row_run if row_run else None, limit=config.max_jobs) if j["job_id"] == job_id), None)
-    return {"meta": {"netuid": config.netuid, "run_id": row_run or "all", "source": "sqlite"}, "job": job, "manifest": manifest, "artifacts": []}
+        resolved_run = rows[0]["run_id"] if rows else None
+
+    manifest: dict[str, Any] | None = None
+    if resolved_run:
+        for manifest_key_fn in (paths.job_manifest_key, paths.audit_job_manifest_key):
+            uri = bucket.uri_for_key(manifest_key_fn(config.netuid, resolved_run, job_id))
+            try:
+                manifest = bucket.get_json(uri)
+                break
+            except Exception:
+                manifest = None
+
+    completion = None
+    if resolved_run:
+        rows = db.query(
+            """
+            SELECT r.*, (SELECT verdict_json FROM verdicts v WHERE v.netuid=r.netuid AND v.run_id=r.run_id AND v.job_id=r.job_id ORDER BY checked_unix DESC LIMIT 1) verdict_json
+            FROM receipts r
+            WHERE r.netuid=? AND r.run_id=? AND r.job_id=?
+            ORDER BY r.finished_unix DESC LIMIT 1
+            """,
+            (config.netuid, resolved_run, job_id),
+        )
+        if rows:
+            completion = _completed_row(rows[0])
+
+    return {
+        "meta": {"netuid": config.netuid, "run_id": resolved_run or "all", "source": "sqlite"},
+        "job": completion,
+        "manifest": manifest,
+    }
 
 
 def _api_chain_meta(db: DashboardDB, config: DashboardConfig) -> dict[str, Any]:
@@ -752,6 +1037,11 @@ def _api_chain_hotkeys(db: DashboardDB, config: DashboardConfig, query: dict[str
     return {"run_id": run_id or "all", "hotkeys": [_chain_dict(r) for r in rows]}
 
 
+# ---------------------------------------------------------------------------
+# SQL projectors
+# ---------------------------------------------------------------------------
+
+
 def _selected_run(db: DashboardDB, config: DashboardConfig, query: dict[str, list[str]]) -> str | None:
     explicit = _first(query, "run_id")
     if explicit in {"", "all", "*", "network"}:
@@ -761,7 +1051,14 @@ def _selected_run(db: DashboardDB, config: DashboardConfig, query: dict[str, lis
     return config.run_id or None
 
 
-def _machines_from_sql(db: DashboardDB, config: DashboardConfig, run_id: str | None, *, now: float) -> list[dict[str, Any]]:
+def _machines_from_sql(
+    db: DashboardDB,
+    config: DashboardConfig,
+    run_id: str | None,
+    *,
+    queue_snap: QueueSnapshot | None,
+    now: float,
+) -> list[dict[str, Any]]:
     if run_id is None:
         rows = db.query(
             """
@@ -795,11 +1092,16 @@ def _machines_from_sql(db: DashboardDB, config: DashboardConfig, run_id: str | N
             """,
             (config.netuid, run_id),
         )
+    receipt_counts = _receipts_by_hotkey(db, config, run_id)
+    inflight = (queue_snap.depth_by_hotkey if queue_snap else {}) or {}
+    cap = queue_snap.max_inflight_per_hotkey if queue_snap else config.max_inflight_per_hotkey
     by_host: dict[str, dict[str, Any]] = {}
-    counts = _worker_counts(db, config, run_id)
     for r in rows:
         host_id = r["host_id"] or "(unknown)"
-        machine = by_host.setdefault(host_id, {"host_id": host_id, "roles": [], "hotkeys": [], "workers": [], "last_seen_unix": 0, "age_sec": 0})
+        machine = by_host.setdefault(
+            host_id,
+            {"host_id": host_id, "roles": [], "hotkeys": [], "workers": [], "last_seen_unix": 0, "age_sec": 0},
+        )
         if r["role"] not in machine["roles"]:
             machine["roles"].append(r["role"])
         if r["hotkey"] not in machine["hotkeys"]:
@@ -811,8 +1113,8 @@ def _machines_from_sql(db: DashboardDB, config: DashboardConfig, run_id: str | N
         chain = _chain_dict(r)
         if chain:
             miner["chain"] = chain
-        key = (r["hotkey"], r["worker_id"])
-        c = counts.get(key, {"jobs": 0, "receipts": 0})
+        depth = int(inflight.get(r["hotkey"], 0))
+        at_cap = bool(cap and depth >= cap)
         machine["workers"].append(
             {
                 "role": r["role"],
@@ -822,150 +1124,77 @@ def _machines_from_sql(db: DashboardDB, config: DashboardConfig, run_id: str | N
                 "chain": chain,
                 "last_seen_unix": r["last_seen_unix"],
                 "age_sec": max(0.0, now - (r["last_seen_unix"] or 0)) if r["last_seen_unix"] else None,
-                "n_jobs": c["jobs"],
-                "n_receipts": c["receipts"],
+                "n_receipts": int(receipt_counts.get(r["hotkey"], 0)),
+                "queue_depth": depth,
+                "queue_cap": int(cap or 0),
+                "at_cap": at_cap,
                 "sources": ["heartbeat", "sqlite"],
             }
         )
     return sorted(by_host.values(), key=lambda m: m["host_id"])
 
 
-def _worker_counts(db: DashboardDB, config: DashboardConfig, run_id: str | None) -> dict[tuple[str, str], dict[str, int]]:
-    out: dict[tuple[str, str], dict[str, int]] = {}
-    job_where = "netuid=?" + (" AND run_id=?" if run_id is not None else "")
+def _receipts_by_hotkey(db: DashboardDB, config: DashboardConfig, run_id: str | None) -> dict[str, int]:
+    where = "netuid=?" + (" AND run_id=?" if run_id is not None else "")
     params = (config.netuid, run_id) if run_id is not None else (config.netuid,)
-    for r in db.query(f"SELECT assigned_hotkey hotkey, COALESCE(assigned_worker,'') worker_id, COUNT(*) n FROM jobs WHERE {job_where} GROUP BY 1,2", params):
-        out.setdefault((r["hotkey"], r["worker_id"]), {"jobs": 0, "receipts": 0})["jobs"] = int(r["n"])
-    for r in db.query(f"SELECT hotkey, COALESCE(worker_id,'') worker_id, COUNT(*) n FROM receipts WHERE {job_where} GROUP BY 1,2", params):
-        out.setdefault((r["hotkey"], r["worker_id"]), {"jobs": 0, "receipts": 0})["receipts"] = int(r["n"])
+    out: dict[str, int] = {}
+    for r in db.query(f"SELECT hotkey, COUNT(*) n FROM receipts WHERE {where} GROUP BY hotkey", params):
+        out[r["hotkey"]] = int(r["n"])
     return out
 
 
-def _jobs_from_sql(db: DashboardDB, config: DashboardConfig, run_id: str | None, *, limit: int | None = None) -> list[dict[str, Any]]:
-    limit = limit or config.max_jobs
-    where = "j.netuid=?" + (" AND j.run_id=?" if run_id is not None else "")
-    params = (config.netuid, run_id, limit) if run_id is not None else (config.netuid, limit)
+def _completed_jobs_from_sql(db: DashboardDB, config: DashboardConfig, run_id: str | None, *, limit: int) -> list[dict[str, Any]]:
+    where = "r.netuid=?" + (" AND r.run_id=?" if run_id is not None else "")
+    params: tuple[Any, ...] = (config.netuid, run_id, limit) if run_id is not None else (config.netuid, limit)
     rows = db.query(
         f"""
-        SELECT j.*, r.receipt_json, r.compute_sec, r.bytes_read, r.bytes_written, r.finished_unix,
-               (SELECT verdict_json FROM verdicts v WHERE v.netuid=j.netuid AND v.run_id=j.run_id AND v.job_id=j.job_id ORDER BY checked_unix DESC LIMIT 1) verdict_json,
-               (SELECT audit_json FROM audits a WHERE a.netuid=j.netuid AND a.run_id=j.run_id AND a.job_id=j.job_id ORDER BY checked_unix DESC LIMIT 1) audit_json
-        FROM jobs j
-        LEFT JOIN receipts r ON r.netuid=j.netuid AND r.run_id=j.run_id AND r.job_id=j.job_id
+        SELECT r.*,
+               (SELECT verdict_json FROM verdicts v WHERE v.netuid=r.netuid AND v.run_id=r.run_id AND v.job_id=r.job_id ORDER BY checked_unix DESC LIMIT 1) verdict_json,
+               (SELECT audit_json   FROM audits   a WHERE a.netuid=r.netuid AND a.run_id=r.run_id AND a.job_id=r.job_id ORDER BY checked_unix DESC LIMIT 1) audit_json
+        FROM receipts r
         WHERE {where}
-        ORDER BY j.created_unix DESC
+        ORDER BY r.finished_unix DESC, r.receipt_id DESC
         LIMIT ?
         """,
         params,
     )
-    now = time.time()
-    out: list[dict[str, Any]] = []
-    for r in rows:
-        manifest = json.loads(r["manifest_json"] or "{}")
-        receipt = json.loads(r["receipt_json"] or "null")
-        verdict = json.loads(r["verdict_json"]) if r["verdict_json"] else None
-        audit = json.loads(r["audit_json"]) if r["audit_json"] else None
-        status = _job_status_from_sql(r, receipt, verdict, now=now)
-        started = receipt.get("started_unix") if isinstance(receipt, dict) else None
-        finished = receipt.get("finished_unix") if isinstance(receipt, dict) else None
-        duration = (finished - started) if started and finished else max(0.0, now - (r["created_unix"] or 0))
-        out.append(
-            {
-                "job_id": r["job_id"],
-                "role": r["role"],
-                "kind": r["kind"],
-                "status": status,
-                "run_id": run_id,
-                "step_id": manifest.get("step_id", 0),
-                "created_unix": r["created_unix"] or 0,
-                "deadline_unix": r["deadline_unix"] or 0,
-                "assigned_hotkey": r["assigned_hotkey"],
-                "assigned_worker": r["assigned_worker"],
-                "attempt": manifest.get("attempt", 0),
-                "critical": ((manifest.get("verification_policy") or {}).get("critical") or False),
-                "input_count": len(manifest.get("inputs") or []),
-                "output_count": len(manifest.get("outputs") or []),
-                "started_unix": started,
-                "finished_unix": finished,
-                "duration_sec": duration,
-                "bytes_read": r["bytes_read"] or 0,
-                "bytes_written": r["bytes_written"] or 0,
-                "compute_sec": r["compute_sec"] or 0.0,
-                "score_points": float(r["compute_sec"] or 0.0),
-                "receipt_id": receipt.get("receipt_id") if isinstance(receipt, dict) else None,
-                "verdicts": [verdict] if verdict else [],
-                "audit_results": [audit] if audit else [],
-                "params": manifest.get("params") or {},
-            }
-        )
-    return out
+    return [_completed_row(r) for r in rows]
 
 
-def _job_status_from_sql(row: sqlite3.Row, receipt: dict | None, verdict: dict | None, *, now: float) -> str:
+def _completed_row(r: sqlite3.Row) -> dict[str, Any]:
+    receipt = json.loads(r["receipt_json"] or "{}")
+    verdict = json.loads(r["verdict_json"]) if r["verdict_json"] else None
+    audit = json.loads(r["audit_json"]) if r["audit_json"] else None
     if verdict and verdict.get("status") == "fail":
-        return "failed"
-    if verdict and verdict.get("status") == "pass":
-        return "verified"
-    if receipt:
-        return "completed"
-    if row["deadline_unix"] and now > row["deadline_unix"]:
-        return "stale"
-    return row["status"] or "created"
-
-
-def _summary(*, machines: list[dict[str, Any]], jobs: list[dict[str, Any]], artifacts: list[dict[str, Any]]) -> dict[str, Any]:
-    by_status: dict[str, int] = {}
-    by_kind: dict[str, int] = {}
-    by_worker: dict[str, int] = {}
-    audits = {"pending": 0, "pass": 0, "fail": 0}
-    for job in jobs:
-        by_status[job["status"]] = by_status.get(job["status"], 0) + 1
-        by_kind[job["kind"]] = by_kind.get(job["kind"], 0) + 1
-        worker = job.get("assigned_worker") or job.get("assigned_hotkey") or "unknown"
-        by_worker[worker] = by_worker.get(worker, 0) + 1
-        for audit in job.get("audit_results", []):
-            if audit and audit.get("status") in ("pass", "fail"):
-                audits[audit["status"]] += 1
-            else:
-                audits["pending"] += 1
+        status = "failed"
+    elif verdict and verdict.get("status") == "pass":
+        status = "verified"
+    else:
+        status = "completed"
+    finished = int(r["finished_unix"] or 0)
+    started = int((receipt.get("started_unix") or 0)) if isinstance(receipt, dict) else 0
     return {
-        "machines": len(machines),
-        "workers": sum(len(m["workers"]) for m in machines),
-        "jobs": len(jobs),
-        "in_flight_jobs": sum(1 for j in jobs if j["status"] in {"created", "running", "outputs_written"}),
-        "completed_jobs": sum(1 for j in jobs if j["status"] in {"completed", "verified"}),
-        "failed_or_stale_jobs": sum(1 for j in jobs if j["status"] in {"failed", "stale"}),
-        "bytes_read": sum(int(j.get("bytes_read") or 0) for j in jobs),
-        "bytes_written": sum(int(j.get("bytes_written") or 0) for j in jobs),
-        "artifacts": len(artifacts),
-        "present_artifacts": sum(1 for a in artifacts if a.get("exists")),
-        "missing_artifacts": sum(1 for a in artifacts if not a.get("exists")),
-        "audits": audits,
-        "by_status": by_status,
-        "by_kind": by_kind,
-        "by_worker": by_worker,
+        "job_id": r["job_id"],
+        "kind": r["kind"] or "",
+        "status": status,
+        "assigned_hotkey": r["hotkey"],
+        "assigned_worker": r["worker_id"],
+        "finished_unix": finished,
+        "started_unix": started or None,
+        "duration_sec": max(0.0, (finished - started)) if (started and finished) else None,
+        "checked_unix": int(verdict.get("checked_unix") or 0) if isinstance(verdict, dict) else None,
+        "compute_sec": float(r["compute_sec"] or 0.0),
+        "bytes_read": int(r["bytes_read"] or 0),
+        "bytes_written": int(r["bytes_written"] or 0),
+        "receipt_id": r["receipt_id"],
+        "verdict": verdict,
+        "audit": audit,
     }
 
 
-def _job_ids(bucket: ObjectStore, index_key: str, prefix: str) -> list[str]:
-    index_uri = bucket.uri_for_key(index_key)
-    try:
-        if bucket.exists(index_uri):
-            return [str(x) for x in bucket.get_json(index_uri)]
-    except Exception:
-        pass
-    ids: list[str] = []
-    for uri in bucket.list(bucket.uri_for_key(prefix))[:2000]:
-        if uri.endswith("/manifest.json"):
-            ids.append(uri.rsplit("/", 2)[-2])
-    return ids
-
-
-def _load_manifest(bucket: ObjectStore, uri: str) -> JobManifestV3 | None:
-    try:
-        return JobManifestV3.from_dict(bucket.get_json(uri))
-    except Exception:
-        return None
+# ---------------------------------------------------------------------------
+# Small helpers (unchanged from prior implementation)
+# ---------------------------------------------------------------------------
 
 
 def _run_id_from_uri(uri: str, prefix: str) -> str | None:
@@ -1046,4 +1275,3 @@ def _first(query: dict[str, list[str]], key: str) -> str | None:
 
 def _index_html(refresh_sec: float) -> str:
     return INDEX_HTML.replace("__REFRESH_MS__", str(max(500, int(refresh_sec * 1000))))
-

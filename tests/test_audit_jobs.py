@@ -5,6 +5,7 @@ from teuton_core import paths
 from teuton_core.protocol import EncryptedAssignmentGrantV3, JobManifestV3, JobReceiptV3
 from teuton_core.wallet_crypto import DevAssignmentCrypto
 from teuton_orchestrator.run_manager import RunConfig, RunManager
+from teuton_runtime.queue import read_queue
 from teuton_validator.audit import AuditReplayConfig, AuditReplayRunner
 from teuton_validator.audit_jobs import AuditJobConfig, AuditJobManager
 from teuton_validator.neuron import ValidatorNeuron, ValidatorNeuronConfig
@@ -32,7 +33,9 @@ def test_audit_jobs_are_assigned_across_auditors(local_bucket, run_id, start_min
     emitted = manager.run_once(max_jobs=4)
 
     assert emitted == 4
-    job_ids = local_bucket.get_json(local_bucket.uri_for_key(paths.audit_job_index_key(0, run_id)))
+    audit_state = read_queue(local_bucket, netuid=0, run_id=run_id, role="audit")
+    assert audit_state is not None
+    job_ids = [entry.job_id for entry in audit_state.outstanding]
     manifests = [
         JobManifestV3.from_dict(local_bucket.get_json(local_bucket.uri_for_key(paths.audit_job_manifest_key(0, run_id, job_id))))
         for job_id in job_ids
@@ -51,7 +54,9 @@ def test_validator_consumes_auditor_result(local_bucket, run_id, start_miners) -
     )
     assert manager.run_once(max_jobs=1) == 1
 
-    job_id = local_bucket.get_json(local_bucket.uri_for_key(paths.audit_job_index_key(0, run_id)))[0]
+    audit_state = read_queue(local_bucket, netuid=0, run_id=run_id, role="audit")
+    assert audit_state is not None and audit_state.outstanding
+    job_id = audit_state.outstanding[0].job_id
     audit_manifest = JobManifestV3.from_dict(
         local_bucket.get_json(local_bucket.uri_for_key(paths.audit_job_manifest_key(0, run_id, job_id)))
     )

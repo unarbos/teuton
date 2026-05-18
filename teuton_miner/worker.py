@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import os
 import json
+import logging
 import threading
 import time
 import uuid
+import urllib.error
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -23,10 +25,46 @@ from teuton_core.wallet_crypto import AssignmentDecryptor, DevAssignmentCrypto, 
 from teuton_runtime.discovery import build_discovery_backend
 from teuton_runtime.distributed_executor import DistributedJobExecutor
 from teuton_runtime.executor import JobExecutor
+from teuton_runtime.queue import QueueEntry, QueueState, read_queue
 from teuton_runtime.storage import ObjectStore
 from teuton_runtime.transport import DirectArtifactTransport, PresignedArtifactTransport
 from teuton_validator.audit_dispatch import run_audit_replay
 from .capabilities import detect_capabilities, device_indices, gpu_index, probe_torch_device
+
+
+LOG = logging.getLogger(__name__)
+
+
+def _completed_cache_path(run_id: str, hotkey: str, worker_id: str) -> Path:
+    """Where the on-disk cache of already-completed job_ids lives.
+
+    Persisted across worker restarts so we don't re-execute jobs whose
+    receipts have already landed (the in-memory ``completed_jobs`` set used
+    to be wiped on every restart).
+    """
+    base = Path(os.environ.get("TEUTON_CACHE_DIR") or (Path.home() / ".teuton" / "cache"))
+    safe_hotkey = hotkey.replace("/", "_")
+    safe_worker = worker_id.replace("/", "_")
+    return base / safe_hotkey / safe_worker / f"{run_id}.completed.txt"
+
+
+def _load_completed_cache(path: Path) -> set[str]:
+    try:
+        if not path.exists():
+            return set()
+        return {line.strip() for line in path.read_text().splitlines() if line.strip()}
+    except Exception as exc:
+        LOG.debug("completed-cache read failed (%s): %r", path, exc)
+        return set()
+
+
+def _append_completed_cache(path: Path, job_id: str) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(f"{job_id}\n")
+    except Exception as exc:
+        LOG.debug("completed-cache append failed (%s): %r", path, exc)
 
 
 @dataclass
@@ -86,6 +124,24 @@ class MinerWorker:
             device=config.device,
             device_group=self.device_group,
         )
+        # Persisted cache of already-executed job_ids so a worker restart
+        # doesn't re-run jobs whose receipts have already landed. The
+        # bucket-side receipt is the durable source of truth; this cache
+        # is purely a per-worker latency optimisation.
+        self._completed_cache_path = _completed_cache_path(
+            run_id=config.run_id,
+            hotkey=config.hotkey_ss58,
+            worker_id=config.worker_id,
+        )
+        self.completed_jobs: set[str] = _load_completed_cache(self._completed_cache_path)
+        # Cached etag from the last queue snapshot so subsequent ticks can
+        # short-circuit on 304 when the orchestrator hasn't moved.
+        self._train_queue_etag: str | None = None
+        self._audit_queue_etag: str | None = None
+        # Last known good snapshots (used when If-None-Match returns 304 so
+        # we still iterate without re-downloading).
+        self._train_queue: QueueState | None = None
+        self._audit_queue: QueueState | None = None
         self.identity = WorkerIdentity(
             hotkey_ss58=config.hotkey_ss58,
             worker_id=config.worker_id,
@@ -141,23 +197,115 @@ class MinerWorker:
 
     def tick(self) -> bool:
         self.heartbeat()
-        index_uri = self.bucket.uri_for_key(paths.job_index_key(self.config.netuid, self.config.run_id))
-        job_ids = self._job_ids(index_uri)
-        for job_id in job_ids:
-            manifest_uri = self.bucket.uri_for_key(paths.job_manifest_key(self.config.netuid, self.config.run_id, job_id))
-            if not self.bucket.exists(manifest_uri):
+        entries = self._fetch_train_queue_entries()
+        # Iterate tail-first: the orchestrator's queue.outstanding ordering
+        # follows insertion order, so newer entries land near the end. We
+        # process newest-first so a backlogged miner makes progress on the
+        # freshest work rather than slogging through aging entries.
+        for entry in reversed(entries):
+            if entry.job_id in self.completed_jobs:
                 continue
-            manifest = JobManifestV3.from_dict(self.bucket.get_json(manifest_uri))
-            if not self._eligible(manifest):
+            if entry.assigned_hotkey != self.config.hotkey_ss58:
                 continue
-            if not self._verify_manifest_signature(manifest):
+            if entry.assigned_worker not in (None, "", self.config.worker_id):
                 continue
-            if all(self.bucket.exists(ref.uri) for ref in manifest.outputs):
-                continue
-            if not all(self.bucket.exists(ref.uri) for ref in manifest.inputs):
-                continue
-            grant = self.load_assignment_grant(manifest) if self.config.grant_mode != "direct" else None
-            grants = self.grants_by_uri(grant) if grant is not None else None
+            if self._execute_queue_entry(entry, role="train"):
+                self.idle_iters = 0
+                return True
+        if self._is_audit_eligible():
+            if self._tick_audit_jobs():
+                self.idle_iters = 0
+                return True
+        self._idle()
+        return False
+
+    def _fetch_train_queue_entries(self) -> list[QueueEntry]:
+        """Read the train queue snapshot, using ``If-None-Match`` for cheap polls.
+
+        Returns an empty list when the queue file is missing. Returns the
+        cached snapshot's entries when the bucket replies 304 (snapshot
+        unchanged since last fetch).
+        """
+        try:
+            state = read_queue(
+                self.bucket,
+                netuid=self.config.netuid,
+                run_id=self.config.run_id,
+                role="train",
+                if_none_match=self._train_queue_etag,
+            )
+        except Exception as exc:
+            LOG.debug("train queue read failed: %r", exc)
+            return list(self._train_queue.outstanding) if self._train_queue is not None else []
+        if state is None:
+            # Either 304 (etag unchanged) or queue.json absent. Fall back
+            # to whatever we last cached.
+            return list(self._train_queue.outstanding) if self._train_queue is not None else []
+        self._train_queue = state
+        self._train_queue_etag = state.etag
+        return list(state.outstanding)
+
+    def _execute_queue_entry(self, entry: QueueEntry, *, role: str) -> bool:
+        """Run one queue entry; returns True if a receipt was written.
+
+        Returns False (without raising) for any soft skip: missing inputs,
+        bad signature, expired grant. Skips are surfaced via
+        ``_mark_skipped`` so operators can see them without enabling debug
+        logs.
+        """
+        manifest_uri = entry.manifest_uri
+        try:
+            payload = self.bucket.get_json(manifest_uri)
+        except FileNotFoundError:
+            self._mark_skipped(entry.job_id, "missing_manifest")
+            return False
+        except Exception as exc:
+            self._mark_skipped(entry.job_id, f"manifest_load_err: {type(exc).__name__}: {exc}")
+            return False
+        try:
+            manifest = JobManifestV3.from_dict(payload)
+        except Exception as exc:
+            self._mark_skipped(entry.job_id, f"manifest_parse_err: {type(exc).__name__}: {exc}")
+            return False
+        if not self._eligible(manifest):
+            self._mark_skipped(manifest.job_id, "not_eligible")
+            return False
+        if not self._verify_manifest_signature(manifest):
+            self._mark_skipped(manifest.job_id, "bad_owner_signature")
+            return False
+        if self.config.grant_mode == "direct" and all(self.bucket.exists(ref.uri) for ref in manifest.outputs):
+            self.completed_jobs.add(manifest.job_id)
+            _append_completed_cache(self._completed_cache_path, manifest.job_id)
+            return False
+        if self.config.grant_mode == "direct" and not all(self.bucket.exists(ref.uri) for ref in manifest.inputs):
+            self._mark_skipped(manifest.job_id, "missing_input_artifacts")
+            return False
+        graph_uri = manifest.graph_ref.uri
+        if graph_uri and not self.bucket.exists(graph_uri):
+            self._mark_skipped(manifest.job_id, "missing_graph_artifact")
+            return False
+        try:
+            if self.config.grant_mode == "direct":
+                grant = None
+            elif role == "audit":
+                grant = self._load_audit_assignment_grant(manifest)
+            else:
+                grant = self.load_assignment_grant(manifest)
+        except FileNotFoundError:
+            self._mark_skipped(manifest.job_id, "missing_assignment_grant")
+            return False
+        except ValueError as exc:
+            self._mark_skipped(manifest.job_id, f"bad_assignment_grant: {exc}")
+            return False
+        except Exception as exc:  # noqa: BLE001 - last resort, still surface
+            self._mark_skipped(manifest.job_id, f"grant_load_err: {type(exc).__name__}: {exc}")
+            return False
+        grants = self.grants_by_uri(grant) if grant is not None else None
+
+        if role == "audit":
+            return self._execute_audit_replay(manifest, grant=grant, grants=grants)
+
+        try:
             receipt = self.executor.execute(
                 manifest,
                 worker=self.identity,
@@ -167,88 +315,99 @@ class MinerWorker:
                 fault_rate=self.config.fault_rate,
                 grants=grants,
             )
-            receipt_uri = self.bucket.uri_for_key(
-                paths.receipt_key(
+        except (FileNotFoundError, urllib.error.HTTPError, ValueError) as exc:
+            self._mark_skipped(manifest.job_id, f"execute_err: {type(exc).__name__}: {exc}")
+            return False
+        receipt_uri = self.bucket.uri_for_key(
+            paths.receipt_key(
+                self.config.netuid,
+                self.config.run_id,
+                self.config.hotkey_ss58,
+                manifest.job_id,
+                manifest.attempt,
+            )
+        )
+        receipt_body = json.dumps(receipt.to_dict(), sort_keys=True, separators=(",", ":")).encode("utf-8")
+        if grant is not None and grant.receipt_put is not None:
+            self.transport.put(receipt_uri, receipt_body, grant.receipt_put)
+        else:
+            self.bucket.put_json(receipt_uri, receipt.to_dict())
+        self.completed_jobs.add(manifest.job_id)
+        _append_completed_cache(self._completed_cache_path, manifest.job_id)
+        return True
+
+    def _execute_audit_replay(
+        self,
+        manifest: JobManifestV3,
+        *,
+        grant: AssignmentGrantV3 | None,
+        grants: dict[str, object] | None,
+    ) -> bool:
+        try:
+            audit = run_audit_replay(
+                bucket=self.bucket,
+                manifest=manifest,
+                worker_hotkey=self.config.hotkey_ss58,
+                auditor_signer=self.signer,
+                owner_secret=self.config.owner_secret,
+                owner_hotkey=self.config.owner_hotkey,
+                miner_secret=self.config.miner_secret,
+                device=self.config.device,
+                grants=grants,
+                transport=self.transport,
+            )
+        except Exception as exc:
+            self._mark_skipped(manifest.job_id, f"audit_err: {type(exc).__name__}: {exc}")
+            return False
+        body = json.dumps(audit.to_dict(), sort_keys=True, separators=(",", ":")).encode("utf-8")
+        if manifest.outputs and grants is not None and manifest.outputs[0].uri in grants:
+            self.transport.put(manifest.outputs[0].uri, body, grants[manifest.outputs[0].uri])
+        else:
+            receipt = JobReceiptV3.from_dict(manifest.params["receipt"])
+            result_uri = self.bucket.uri_for_key(
+                paths.audit_result_key(
                     self.config.netuid,
                     self.config.run_id,
                     self.config.hotkey_ss58,
-                    manifest.job_id,
-                    manifest.attempt,
+                    receipt.receipt_id,
                 )
             )
-            receipt_body = json.dumps(receipt.to_dict(), sort_keys=True, separators=(",", ":")).encode("utf-8")
-            if grant is not None and grant.receipt_put is not None:
-                self.transport.put(receipt_uri, receipt_body, grant.receipt_put)
-            else:
-                self.bucket.put_json(receipt_uri, receipt.to_dict())
-            self.idle_iters = 0
-            return True
-        # No training work to do this tick — if we're flagged as an audit-
-        # eligible peer, sweep the audit job index for work assigned to us.
-        if self._is_audit_eligible():
-            if self._tick_audit_jobs():
-                self.idle_iters = 0
-                return True
-        self._idle()
-        return False
+            self.bucket.put_json(result_uri, audit.to_dict())
+        self.completed_jobs.add(manifest.job_id)
+        _append_completed_cache(self._completed_cache_path, manifest.job_id)
+        return True
 
     def _is_audit_eligible(self) -> bool:
         return self.config.hotkey_ss58 in set(self.config.audit_eligible_hotkeys)
 
     def _tick_audit_jobs(self) -> bool:
-        index_uri = self.bucket.uri_for_key(paths.audit_job_index_key(self.config.netuid, self.config.run_id))
+        """Pull the audit queue snapshot and execute one assigned entry."""
         try:
-            job_ids = self.bucket.get_json(index_uri) if self.bucket.exists(index_uri) else []
-        except Exception:
+            state = read_queue(
+                self.bucket,
+                netuid=self.config.netuid,
+                run_id=self.config.run_id,
+                role="audit",
+                if_none_match=self._audit_queue_etag,
+            )
+        except Exception as exc:
+            LOG.debug("audit queue read failed: %r", exc)
             return False
-        for job_id in job_ids:
-            manifest_uri = self.bucket.uri_for_key(paths.audit_job_manifest_key(self.config.netuid, self.config.run_id, job_id))
-            if not self.bucket.exists(manifest_uri):
+        if state is None:
+            entries = list(self._audit_queue.outstanding) if self._audit_queue is not None else []
+        else:
+            self._audit_queue = state
+            self._audit_queue_etag = state.etag
+            entries = list(state.outstanding)
+        for entry in entries:
+            if entry.job_id in self.completed_jobs:
                 continue
-            try:
-                manifest = JobManifestV3.from_dict(self.bucket.get_json(manifest_uri))
-            except Exception:
+            if entry.assigned_hotkey != self.config.hotkey_ss58:
                 continue
-            if manifest.kind != "audit_replay":
+            if entry.assigned_worker not in (None, "", self.config.worker_id):
                 continue
-            if not self._eligible(manifest):
-                continue
-            if not self._verify_manifest_signature(manifest):
-                continue
-            if manifest.outputs and all(self.bucket.exists(ref.uri) for ref in manifest.outputs):
-                continue
-            grant = self._load_audit_assignment_grant(manifest) if self.config.grant_mode != "direct" else None
-            grants = self.grants_by_uri(grant) if grant is not None else None
-            try:
-                audit = run_audit_replay(
-                    bucket=self.bucket,
-                    manifest=manifest,
-                    worker_hotkey=self.config.hotkey_ss58,
-                    auditor_signer=self.signer,
-                    owner_secret=self.config.owner_secret,
-                    owner_hotkey=self.config.owner_hotkey,
-                    miner_secret=self.config.miner_secret,
-                    device=self.config.device,
-                    grants=grants,
-                    transport=self.transport,
-                )
-            except Exception:
-                continue
-            body = json.dumps(audit.to_dict(), sort_keys=True, separators=(",", ":")).encode("utf-8")
-            if manifest.outputs and grants is not None and manifest.outputs[0].uri in grants:
-                self.transport.put(manifest.outputs[0].uri, body, grants[manifest.outputs[0].uri])
-            else:
-                receipt = JobReceiptV3.from_dict(manifest.params["receipt"])
-                result_uri = self.bucket.uri_for_key(
-                    paths.audit_result_key(
-                        self.config.netuid,
-                        self.config.run_id,
-                        self.config.hotkey_ss58,
-                        receipt.receipt_id,
-                    )
-                )
-                self.bucket.put_json(result_uri, audit.to_dict())
-            return True
+            if self._execute_queue_entry(entry, role="audit"):
+                return True
         return False
 
     def _load_audit_assignment_grant(self, manifest: JobManifestV3) -> AssignmentGrantV3:
@@ -272,27 +431,6 @@ class MinerWorker:
         if grant.expires_unix < now:
             raise ValueError("audit assignment grant expired")
         return grant
-
-    def _job_ids(self, fallback_index_uri: str) -> list[str]:
-        out: list[str] = []
-        jobs_prefix = self.bucket.uri_for_key(paths.jobs_prefix(self.config.netuid, self.config.run_id))
-        for uri in self.bucket.list(jobs_prefix):
-            if not uri.endswith("/index.json"):
-                continue
-            try:
-                for job_id in self.bucket.get_json(uri):
-                    if job_id not in out:
-                        out.append(job_id)
-            except Exception:
-                continue
-        if out:
-            return out
-        if self.bucket.exists(fallback_index_uri):
-            try:
-                return list(self.bucket.get_json(fallback_index_uri))
-            except Exception:
-                return []
-        return []
 
     def load_assignment_grant(self, manifest: JobManifestV3) -> AssignmentGrantV3:
         uri = self.bucket.uri_for_key(
@@ -357,6 +495,34 @@ class MinerWorker:
         self.idle_iters += 1
         if self.config.max_idle_iters is not None and self.idle_iters >= self.config.max_idle_iters:
             self.stop()
+
+    def _mark_skipped(self, job_id: str, reason: str) -> None:
+        """Surface a job that the miner declined to run.
+
+        Writes a tiny ``skip.json`` next to the manifest with the hotkey,
+        worker_id, and reason. Operators can list these via the bucket to
+        diagnose silent drops -- previously every skip was a bare
+        ``except: continue`` and the job just disappeared from the operator
+        view. Failures here are best-effort; we never let a write error
+        stop the worker loop.
+        """
+        try:
+            key = (
+                f"{paths.jobs_prefix(self.config.netuid, self.config.run_id)}"
+                f"{job_id}/skip-{self.config.hotkey_ss58}-{self.config.worker_id}.json"
+            )
+            self.bucket.put_json(
+                self.bucket.uri_for_key(key),
+                {
+                    "job_id": job_id,
+                    "hotkey": self.config.hotkey_ss58,
+                    "worker_id": self.config.worker_id,
+                    "reason": reason,
+                    "skip_unix": int(time.time()),
+                },
+            )
+        except Exception:
+            pass
 
     def heartbeat(self, *, force: bool = False) -> None:
         now = time.time()

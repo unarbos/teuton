@@ -142,20 +142,29 @@ code { font-family: var(--mono); }
 .miners-table, .jobs-table { min-width: 0; }
 .miners-table th:nth-child(1), .miners-table td:nth-child(1),
 .jobs-table th:nth-child(1), .jobs-table td:nth-child(1) { width: 4%; }
-.miners-table th:nth-child(2), .miners-table td:nth-child(2) { width: 9%; }
-.miners-table th:nth-child(3), .miners-table td:nth-child(3) { width: 20%; }
-.miners-table th:nth-child(4), .miners-table td:nth-child(4) { width: 18%; }
-.miners-table th:nth-child(5), .miners-table td:nth-child(5) { width: 7%; text-align: right; }
-.miners-table th:nth-child(6), .miners-table td:nth-child(6) { width: 10%; text-align: right; }
-.miners-table th:nth-child(7), .miners-table td:nth-child(7) { width: 8%; text-align: right; }
+/* Miners: # | Status | M/H/W | GPU | UID | Emit | Inflight | Rcpts | Ping */
+.miners-table th:nth-child(2), .miners-table td:nth-child(2) { width: 8%; }
+.miners-table th:nth-child(3), .miners-table td:nth-child(3) { width: 18%; }
+.miners-table th:nth-child(4), .miners-table td:nth-child(4) { width: 14%; }
+.miners-table th:nth-child(5), .miners-table td:nth-child(5) { width: 6%; text-align: right; }
+.miners-table th:nth-child(6), .miners-table td:nth-child(6) { width: 9%; text-align: right; }
+.miners-table th:nth-child(7), .miners-table td:nth-child(7) { width: 18%; text-align: right; }
 .miners-table th:nth-child(8), .miners-table td:nth-child(8) { width: 8%; text-align: right; }
 .miners-table th:nth-child(9), .miners-table td:nth-child(9) { width: 8%; text-align: right; }
-.jobs-table th:nth-child(2), .jobs-table td:nth-child(2) { width: 18%; }
-.jobs-table th:nth-child(3), .jobs-table td:nth-child(3) { width: 14%; }
-.jobs-table th:nth-child(4), .jobs-table td:nth-child(4) { width: 10%; }
-.jobs-table th:nth-child(5), .jobs-table td:nth-child(5) { width: 15%; text-align: right; }
+/* Outstanding jobs: # | Kind | Miner | Age | Attempt | Deadline */
+.outstanding-table th:nth-child(1), .outstanding-table td:nth-child(1) { width: 4%; }
+.outstanding-table th:nth-child(2), .outstanding-table td:nth-child(2) { width: 24%; }
+.outstanding-table th:nth-child(3), .outstanding-table td:nth-child(3) { width: 14%; }
+.outstanding-table th:nth-child(4), .outstanding-table td:nth-child(4) { width: 14%; text-align: right; }
+.outstanding-table th:nth-child(5), .outstanding-table td:nth-child(5) { width: 14%; text-align: right; }
+.outstanding-table th:nth-child(6), .outstanding-table td:nth-child(6) { width: 30%; text-align: right; }
+/* Completed jobs: # | Kind | Status | Miner | Finished | Latency | I/O */
+.jobs-table th:nth-child(2), .jobs-table td:nth-child(2) { width: 20%; }
+.jobs-table th:nth-child(3), .jobs-table td:nth-child(3) { width: 12%; }
+.jobs-table th:nth-child(4), .jobs-table td:nth-child(4) { width: 12%; }
+.jobs-table th:nth-child(5), .jobs-table td:nth-child(5) { width: 13%; text-align: right; }
 .jobs-table th:nth-child(6), .jobs-table td:nth-child(6) { width: 11%; text-align: right; }
-.jobs-table th:nth-child(7), .jobs-table td:nth-child(7) { width: 28%; text-align: right; }
+.jobs-table th:nth-child(7), .jobs-table td:nth-child(7) { width: 24%; text-align: right; }
 
 #theme-toggle {
     background: none;
@@ -299,6 +308,147 @@ code { font-family: var(--mono); }
 .metric-tab:hover { background: var(--ink); color: var(--ink-inv); }
 .metric-tab.active { background: var(--ink); color: var(--ink-inv); }
 
+/* ---------------------------------------------------------------------
+   Queue panel: depth headline + sparkline + per-miner inflight grid.
+   Sized to render between the hero and the compute chart without
+   needing its own scroll container.
+   --------------------------------------------------------------------- */
+.queue-headline {
+    display: flex;
+    align-items: baseline;
+    gap: 16px;
+    flex-wrap: wrap;
+    padding: 4px 0 8px;
+    border-bottom: var(--border-faint);
+}
+.queue-depth-big {
+    font: 700 28px/1 var(--mono);
+    letter-spacing: 0.04em;
+}
+.queue-depth-cap {
+    font: 600 12px/1 var(--mono);
+    opacity: 0.55;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+}
+.queue-meta {
+    font: 600 10px/1.4 var(--mono);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    opacity: 0.7;
+}
+.queue-meta strong { font-weight: 700; opacity: 1; }
+.queue-meta .alert { color: var(--ink); font-weight: 700; }
+
+#queue-spark-wrap {
+    position: relative;
+    padding: 4px 0 8px;
+    border-bottom: var(--border-faint);
+}
+#queue-spark {
+    width: 100%;
+    height: 80px;
+    display: block;
+    overflow: visible;
+}
+.queue-spark-line {
+    fill: none;
+    stroke: var(--ink);
+    stroke-width: 1.4;
+    vector-effect: non-scaling-stroke;
+    stroke-linejoin: round;
+}
+.queue-spark-area {
+    fill: var(--ink);
+    opacity: 0.05;
+}
+.queue-spark-baseline {
+    stroke: var(--ink);
+    opacity: 0.2;
+    stroke-dasharray: 2 4;
+    vector-effect: non-scaling-stroke;
+}
+.queue-empty {
+    font: 600 11px/1 var(--mono);
+    fill: var(--ink-muted);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+.queue-axis {
+    position: absolute;
+    font: 10px/1 var(--mono);
+    color: var(--ink-muted);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+.queue-axis-xstart { bottom: 8px; left: 0; }
+.queue-axis-xend { bottom: 8px; right: 0; }
+.queue-axis-ymax { top: 4px; right: 0; }
+
+#queue-bars {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 6px 16px;
+    padding-top: 8px;
+}
+.queue-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font: 11px/1 var(--mono);
+}
+.queue-bar-id { width: 96px; flex-shrink: 0; opacity: 0.85; }
+.queue-bar-track {
+    flex: 1;
+    height: 8px;
+    border: var(--border-faint);
+    position: relative;
+}
+.queue-bar-fill {
+    height: 100%;
+    background: var(--ink);
+    opacity: 0.55;
+}
+.queue-bar.at-cap .queue-bar-fill { opacity: 1; }
+.queue-bar-num {
+    width: 44px;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+.queue-bar.at-cap .queue-bar-num { font-weight: 700; }
+
+/* ---------------------------------------------------------------------
+   Inline inflight bar inside the Miners table.
+   --------------------------------------------------------------------- */
+.inflight-cell {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font: 600 11px/1 var(--mono);
+}
+.inflight-track {
+    width: 56px;
+    height: 6px;
+    border: var(--border-faint);
+    position: relative;
+}
+.inflight-fill {
+    height: 100%;
+    background: var(--ink);
+    opacity: 0.55;
+}
+.inflight-cell.at-cap .inflight-fill { opacity: 1; }
+.inflight-cell.at-cap { font-weight: 700; }
+
+/* Completed-job status pill colors layered on the existing status-pill base. */
+.status-completed { background: var(--ink); color: var(--ink-inv); opacity: 0.6; }
+.status-verified  { background: var(--ink); color: var(--ink-inv); }
+.status-failed    { opacity: 0.7; font-style: italic; }
+
+/* Deadline countdown column: red when expired. */
+.deadline-expired { font-weight: 700; }
+.attempt-retry { font-weight: 700; }
+
 @media (max-width: 640px) {
     .page { padding: 16px 12px; gap: 16px; }
     #top-bar { font-size: 11px !important; }
@@ -327,6 +477,31 @@ code { font-family: var(--mono); }
     <div id="error" style="display:none"></div>
 
     <div>
+        <div class="section-label">
+            <span>Queue</span>
+            <span class="count" id="queue-meta-line">--</span>
+        </div>
+        <div class="queue-headline">
+            <div>
+                <div class="queue-depth-big" id="queue-depth-big">--</div>
+                <div class="queue-depth-cap" id="queue-depth-cap">outstanding / cap</div>
+            </div>
+            <div class="queue-meta">
+                <div>BACKPRESSURE <strong id="queue-backpressure">--</strong></div>
+                <div>OLDEST <strong id="queue-oldest">--</strong></div>
+                <div>SNAPSHOT <strong id="queue-snapshot-age">--</strong></div>
+            </div>
+        </div>
+        <div id="queue-spark-wrap">
+            <svg id="queue-spark" viewBox="0 0 1000 80" preserveAspectRatio="none"></svg>
+            <span id="queue-spark-y-max" class="queue-axis queue-axis-ymax"></span>
+            <span class="queue-axis queue-axis-xstart">-30m</span>
+            <span class="queue-axis queue-axis-xend">now</span>
+        </div>
+        <div id="queue-bars"></div>
+    </div>
+
+    <div>
         <div class="section-label graph-label">
             <span id="graph-title">Metrics</span>
             <div class="metric-tabs" id="graph-tabs"></div>
@@ -350,15 +525,15 @@ code { font-family: var(--mono); }
         <div class="scroll-box">
             <table class="data-table miners-table">
                 <thead><tr>
-                    <th style="width:36px">#</th>
-                    <th style="width:90px" data-miner-sort="status">Status</th>
+                    <th>#</th>
+                    <th data-miner-sort="status">Status</th>
                     <th data-miner-sort="identity">M/H/W</th>
-                    <th style="width:110px">GPU</th>
-                    <th style="width:60px;text-align:right" data-miner-sort="uid">UID</th>
-                    <th style="width:90px;text-align:right" data-miner-sort="emission">Emit</th>
-                    <th style="width:60px;text-align:right" data-miner-sort="jobs">Jobs</th>
-                    <th style="width:70px;text-align:right" data-miner-sort="receipts">Rcpts</th>
-                    <th style="width:80px;text-align:right" data-miner-sort="ping">Ping</th>
+                    <th>GPU</th>
+                    <th data-miner-sort="uid">UID</th>
+                    <th data-miner-sort="emission">Emit</th>
+                    <th data-miner-sort="inflight">Inflight</th>
+                    <th data-miner-sort="receipts">Rcpts</th>
+                    <th data-miner-sort="ping">Ping</th>
                 </tr></thead>
                 <tbody id="miners"></tbody>
             </table>
@@ -367,20 +542,40 @@ code { font-family: var(--mono); }
 
     <div>
         <div class="section-label">
-            <span>Jobs</span>
+            <span>Outstanding</span>
+            <span class="count" id="outstanding-count">--</span>
+        </div>
+        <div class="scroll-box">
+            <table class="data-table outstanding-table">
+                <thead><tr>
+                    <th>#</th>
+                    <th>Kind</th>
+                    <th>Miner</th>
+                    <th>Age</th>
+                    <th>Attempt</th>
+                    <th>Deadline</th>
+                </tr></thead>
+                <tbody id="outstanding"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <div>
+        <div class="section-label">
+            <span>Completed</span>
             <span class="count" id="jobs-count">--</span>
         </div>
         <div class="filter-bar" id="jobs-filter"></div>
         <div class="scroll-box">
             <table class="data-table jobs-table">
                 <thead><tr>
-                    <th style="width:36px">#</th>
-                    <th style="width:140px">Kind</th>
-                    <th style="width:120px">Status</th>
-                    <th>Worker</th>
-                    <th style="width:90px">Created</th>
-                    <th style="width:90px;text-align:right">Points</th>
-                    <th style="width:160px">I/O</th>
+                    <th>#</th>
+                    <th>Kind</th>
+                    <th>Status</th>
+                    <th>Miner</th>
+                    <th>Finished</th>
+                    <th>Latency</th>
+                    <th>I/O</th>
                 </tr></thead>
                 <tbody id="jobs"></tbody>
             </table>
@@ -392,15 +587,16 @@ code { font-family: var(--mono); }
 <script>
 var POLL_MS = __REFRESH_MS__;
 var JOB_STATUS_FILTERS = [
+    { id: "all", label: "All" },
     { id: "completed", label: "Completed" },
     { id: "verified", label: "Verified" },
-    { id: "failed", label: "Failed" },
-    { id: "stale", label: "Stale" }
+    { id: "failed", label: "Failed" }
 ];
 var MINER_STATUS_FILTERS = [
     { id: "all", label: "All" },
     { id: "live", label: "Live" },
-    { id: "stale", label: "Stale" }
+    { id: "stale", label: "Stale" },
+    { id: "at-cap", label: "At-cap" }
 ];
 var GRAPH_METRICS = [
     { id: "compute", label: "Compute", unit: "CU/s", empty: "Awaiting first compute receipt" },
@@ -408,7 +604,7 @@ var GRAPH_METRICS = [
     { id: "jobs", label: "Jobs", unit: "jobs/s", empty: "Awaiting first completed job" },
     { id: "latency", label: "Latency", unit: "avg", empty: "Awaiting first timed job" }
 ];
-var DEFAULT_JOBS_FILTER = "completed";
+var DEFAULT_JOBS_FILTER = "all";
 var DEFAULT_MINERS_FILTER = "all";
 var DEFAULT_GRAPH_METRIC = "compute";
 
@@ -439,7 +635,7 @@ var state = {
     jobsFilter: _validFilter(localStorage.getItem("jobsFilter"), JOB_STATUS_FILTERS, DEFAULT_JOBS_FILTER),
     minersFilter: _validFilter(localStorage.getItem("minersFilter"), MINER_STATUS_FILTERS, DEFAULT_MINERS_FILTER),
     graphMetric: _validFilter(localStorage.getItem("graphMetric"), GRAPH_METRICS, DEFAULT_GRAPH_METRIC),
-    minersSort: { key: localStorage.getItem("minersSortKey") || "emission", dir: localStorage.getItem("minersSortDir") || "desc" },
+    minersSort: { key: localStorage.getItem("minersSortKey") || "inflight", dir: localStorage.getItem("minersSortDir") || "desc" },
     computeRates: null,
     graphRawRates: null,
     graphMetricDef: null,
@@ -553,12 +749,18 @@ function renderMiners() {
     for (var k = 0; k < rows.length; k++) {
         var st = rows[k].row.status || "live";
         if (counts[st] !== undefined) counts[st] += 1;
+        if (rows[k].row.at_cap) counts["at-cap"] = (counts["at-cap"] || 0) + 1;
     }
     renderMinersFilter(counts);
     var filter = state.minersFilter;
-    var filtered = filter === "all" ? rows.slice() : rows.filter(function(r) {
-        return (r.row.status || "live") === filter;
-    });
+    var filtered;
+    if (filter === "all") {
+        filtered = rows.slice();
+    } else if (filter === "at-cap") {
+        filtered = rows.filter(function(r) { return !!r.row.at_cap; });
+    } else {
+        filtered = rows.filter(function(r) { return (r.row.status || "live") === filter; });
+    }
     filtered.sort(minerSortComparator(state.minersSort.key, state.minersSort.dir));
     document.getElementById("miners-count").textContent = filtered.length + " of " + rows.length;
     var body = document.getElementById("miners");
@@ -575,7 +777,6 @@ function renderMiners() {
         var status = item.row.status || "live";
         var pillCls = "status-pill status-" + status;
         var sources = (item.row.sources || []).join("+") || "";
-        var ageVal = item.row.age_sec;
         var pingMs = cap.rtt_to_bucket_ms;
         var pingStr = (pingMs == null) ? "--" : fmtDurationMs(pingMs);
         var identityTitle = [
@@ -584,6 +785,15 @@ function renderMiners() {
             "worker=" + (w.worker_id || "--")
         ].join(" ");
         var identity = trim5(w.hotkey_ss58) + "/" + trim5(w.host_id) + "/" + trim5(w.worker_id);
+        var depth = Number(item.row.queue_depth || 0);
+        var qcap = Number(item.row.queue_cap || 0);
+        var atCap = !!item.row.at_cap;
+        var pct = (qcap > 0) ? Math.min(100, (depth / qcap) * 100) : 0;
+        var inflightHtml = (qcap > 0)
+            ? '<span class="inflight-cell' + (atCap ? ' at-cap' : '') + '">' +
+              '<span class="inflight-track"><span class="inflight-fill" style="width:' + pct.toFixed(0) + '%"></span></span>' +
+              '<span>' + depth + '/' + qcap + '</span></span>'
+            : '<span class="inflight-cell"><span>' + depth + '</span></span>';
         return '<tr>' +
             '<td>' + (i + 1) + '</td>' +
             '<td><span class="' + pillCls + '" title="' + esc(sources) + '">' + esc(status) + '</span></td>' +
@@ -591,7 +801,7 @@ function renderMiners() {
             '<td>' + esc(gpu) + '</td>' +
             '<td style="text-align:right">' + esc(chain.uid == null ? "--" : chain.uid) + '</td>' +
             '<td style="text-align:right" title="' + esc(chain.emission == null ? "" : chain.emission) + '">' + esc(chain.emission == null ? "--" : fmtPoints(chain.emission)) + '</td>' +
-            '<td style="text-align:right">' + esc(item.row.n_jobs || 0) + '</td>' +
+            '<td style="text-align:right">' + inflightHtml + '</td>' +
             '<td style="text-align:right">' + esc(item.row.n_receipts || 0) + '</td>' +
             '<td style="text-align:right">' + esc(pingStr) + '</td>' +
             '</tr>';
@@ -607,8 +817,9 @@ function minerSortValue(item, key) {
     if (key === "uid") return chain.uid == null ? -1 : Number(chain.uid);
     if (key === "emission") return chain.emission == null ? -1 : Number(chain.emission);
     if (key === "receipts") return Number(item.row.n_receipts || 0);
+    if (key === "inflight") return Number(item.row.queue_depth || 0);
     if (key === "ping") return cap.rtt_to_bucket_ms == null ? Number.POSITIVE_INFINITY : Number(cap.rtt_to_bucket_ms);
-    return Number(item.row.n_jobs || 0);
+    return Number(item.row.queue_depth || 0);
 }
 
 function minerSortComparator(key, dir) {
@@ -648,49 +859,221 @@ function renderJobsFilter(counts) {
 }
 
 function jobStatusClass(status) {
-    var cls = "status-pill ";
-    if (status === "completed" || status === "verified") return cls + "status-live";
-    if (status === "failed" || status === "stale") return cls + "status-stale";
-    return cls + "status-assigned";
+    return "status-pill status-" + status;
+}
+
+function completedJobs() {
+    var jobs = (state.snapshot && state.snapshot.jobs);
+    if (!jobs) return [];
+    // Legacy dev-dashboard shape: jobs is a flat array of mixed states. Show
+    // anything with a receipt/verdict as "completed".
+    if (Array.isArray(jobs)) {
+        return jobs.filter(function(j) {
+            return j.status === "completed" || j.status === "verified" || j.status === "failed";
+        });
+    }
+    return jobs.completed || [];
+}
+
+function outstandingJobs() {
+    var jobs = (state.snapshot && state.snapshot.jobs);
+    if (!jobs) return [];
+    if (Array.isArray(jobs)) {
+        // Legacy: best-effort -- treat the "created" status as outstanding so
+        // the dev dashboard still has something to show in the new section.
+        return jobs.filter(function(j) { return j.status === "created"; }).map(function(j) {
+            return {
+                job_id: j.job_id, kind: j.kind, assigned_hotkey: j.assigned_hotkey,
+                assigned_worker: j.assigned_worker, attempt: j.attempt || 0,
+                created_unix: j.created_unix, deadline_unix: j.deadline_unix
+            };
+        });
+    }
+    return jobs.outstanding || [];
+}
+
+function renderOutstandingJobs() {
+    var jobs = outstandingJobs();
+    document.getElementById("outstanding-count").textContent = jobs.length + " outstanding";
+    var body = document.getElementById("outstanding");
+    if (!jobs.length) {
+        body.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:16px">Queue is empty.</td></tr>';
+        return;
+    }
+    var nowUnix = (state.snapshot && state.snapshot.meta && state.snapshot.meta.generated_unix) || (Date.now() / 1000);
+    body.innerHTML = jobs.map(function(j, i) {
+        var worker = j.assigned_worker || j.assigned_hotkey || "--";
+        var workerTitle = "miner=" + (j.assigned_hotkey || "--") + " worker=" + (j.assigned_worker || "--");
+        var age = j.created_unix ? Math.max(0, nowUnix - j.created_unix) : null;
+        var ageLabel = age != null ? fmtDurationSec(age) : "--";
+        var attemptCls = (Number(j.attempt || 0) > 0) ? "attempt-retry" : "";
+        var deadlineLeft = j.deadline_unix ? (j.deadline_unix - nowUnix) : null;
+        var deadlineLabel;
+        var deadlineCls = "";
+        if (deadlineLeft == null) {
+            deadlineLabel = "--";
+        } else if (deadlineLeft < 0) {
+            deadlineLabel = "-" + fmtDurationSec(-deadlineLeft);
+            deadlineCls = "deadline-expired";
+        } else {
+            deadlineLabel = fmtDurationSec(deadlineLeft);
+        }
+        return '<tr>' +
+            '<td>' + (i + 1) + '</td>' +
+            '<td>' + esc(j.kind || "--") + '</td>' +
+            '<td><code title="' + esc(workerTitle) + '">' + esc(trim5(worker)) + '</code></td>' +
+            '<td style="text-align:right">' + esc(ageLabel) + '</td>' +
+            '<td style="text-align:right" class="' + attemptCls + '">' + esc(String(j.attempt || 0)) + '</td>' +
+            '<td style="text-align:right" class="' + deadlineCls + '">' + esc(deadlineLabel) + '</td>' +
+            '</tr>';
+    }).join("");
 }
 
 function renderJobs() {
-    var jobs = (state.snapshot && state.snapshot.jobs) || [];
+    var jobs = completedJobs();
     var counts = {};
     JOB_STATUS_FILTERS.forEach(function(f) { counts[f.id] = 0; });
+    counts.all = jobs.length;
     for (var k = 0; k < jobs.length; k++) {
         var s = jobs[k].status;
         if (counts[s] !== undefined) counts[s] += 1;
     }
     renderJobsFilter(counts);
     var filter = state.jobsFilter;
-    var filtered = jobs.filter(function(j) { return j.status === filter; });
-    document.getElementById("jobs-count").textContent = filtered.length + " of " + jobs.length + " jobs";
+    var filtered = filter === "all" ? jobs.slice() : jobs.filter(function(j) { return j.status === filter; });
+    document.getElementById("jobs-count").textContent = filtered.length + " of " + jobs.length + " completed";
     var body = document.getElementById("jobs");
     if (!filtered.length) {
-        var emptyLabel = esc(filter) + " ";
-        body.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:16px">No ' + emptyLabel + 'jobs in this run.</td></tr>';
+        var emptyLabel = filter === "all" ? "" : esc(filter) + " ";
+        body.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:16px">No ' + emptyLabel + 'completed jobs in this run.</td></tr>';
         return;
     }
-    var ordered = filtered.slice().sort(function(a, b) { return (b.created_unix || 0) - (a.created_unix || 0); });
+    function activityUnix(j) {
+        return Number(j.checked_unix || j.finished_unix || 0);
+    }
+    var ordered = filtered.slice().sort(function(a, b) { return activityUnix(b) - activityUnix(a); });
     var nowUnix = (state.snapshot && state.snapshot.meta && state.snapshot.meta.generated_unix) || (Date.now() / 1000);
     body.innerHTML = ordered.map(function(j, i) {
-        var createdAge = j.created_unix ? Math.max(0, nowUnix - j.created_unix) : null;
-        var createdLabel = createdAge != null ? fmtDurationSec(createdAge) + " ago" : "--";
-        var createdTitle = j.created_unix ? fmtTime(j.created_unix) : "";
-        var io = fmtBytes(j.bytes_read) + " / " + fmtBytes(j.bytes_written);
-        var ioTitle = "read " + fmtBytes(j.bytes_read) + " \u2192 wrote " + fmtBytes(j.bytes_written);
+        var finishedAge = j.finished_unix ? Math.max(0, nowUnix - j.finished_unix) : null;
+        var finishedLabel = finishedAge != null ? fmtDurationSec(finishedAge) + " ago" : "--";
+        var finishedTitle = j.finished_unix ? fmtTime(j.finished_unix) : "";
+        var latency = (j.duration_sec != null) ? fmtDurationSec(j.duration_sec) : "--";
+        var ioBytes = Number(j.bytes_read || 0) + Number(j.bytes_written || 0);
+        var io = ioBytes > 0 ? fmtBytes(ioBytes) : "--";
+        var ioTitle = "read " + fmtBytes(j.bytes_read) + " / wrote " + fmtBytes(j.bytes_written);
         var worker = j.assigned_worker || j.assigned_hotkey || "--";
         return '<tr>' +
             '<td>' + (i + 1) + '</td>' +
+            '<td>' + esc(j.kind || "--") + '</td>' +
             '<td><span class="' + jobStatusClass(j.status) + '">' + esc(j.status) + '</span></td>' +
-            '<td>' + esc(j.kind) + '</td>' +
             '<td><code title="' + esc(worker) + '">' + esc(trim5(worker)) + '</code></td>' +
-            '<td title="' + esc(createdTitle) + '">' + esc(createdLabel) + '</td>' +
-            '<td style="text-align:right" title="' + esc(Number(j.score_points || 0).toFixed(6) + " score points") + '">' + esc(fmtPoints(j.score_points)) + '</td>' +
-            '<td title="' + esc(ioTitle) + '">' + esc(io) + '</td>' +
+            '<td style="text-align:right" title="' + esc(finishedTitle) + '">' + esc(finishedLabel) + '</td>' +
+            '<td style="text-align:right">' + esc(latency) + '</td>' +
+            '<td style="text-align:right" title="' + esc(ioTitle) + '">' + esc(io) + '</td>' +
             '</tr>';
     }).join("");
+}
+
+function renderQueue() {
+    var snap = state.snapshot && state.snapshot.queue;
+    var depthBigEl = document.getElementById("queue-depth-big");
+    var depthCapEl = document.getElementById("queue-depth-cap");
+    var bpEl = document.getElementById("queue-backpressure");
+    var oldestEl = document.getElementById("queue-oldest");
+    var snapAgeEl = document.getElementById("queue-snapshot-age");
+    var metaLineEl = document.getElementById("queue-meta-line");
+    var barsEl = document.getElementById("queue-bars");
+    var spark = document.getElementById("queue-spark");
+    var sparkYMax = document.getElementById("queue-spark-y-max");
+    if (!snap) {
+        depthBigEl.textContent = "--";
+        depthCapEl.textContent = "no queue yet";
+        bpEl.textContent = "--";
+        oldestEl.textContent = "--";
+        snapAgeEl.textContent = "--";
+        metaLineEl.textContent = "no snapshot";
+        barsEl.innerHTML = "";
+        spark.innerHTML = '<text class="queue-empty" x="500" y="40" text-anchor="middle">Awaiting first queue snapshot</text>';
+        sparkYMax.textContent = "";
+        return;
+    }
+
+    var nowUnix = (state.snapshot.meta && state.snapshot.meta.generated_unix) || (Date.now() / 1000);
+    var depth = Number(snap.depth_total || 0);
+    var cap = Number(snap.max_inflight_per_hotkey || 0);
+    var byHotkey = snap.depth_by_hotkey || {};
+    var minerCount = Object.keys(byHotkey).length;
+    var maxNetCap = cap > 0 ? cap * Math.max(minerCount, 1) : 0;
+    depthBigEl.textContent = depth + (maxNetCap > 0 ? " / " + maxNetCap : "");
+    depthCapEl.textContent = cap > 0
+        ? "outstanding / cap (" + cap + " per miner * " + minerCount + " miners)"
+        : "outstanding entries";
+
+    var atCap = Number(snap.at_cap_count || 0);
+    var bpFraction = minerCount > 0 ? (atCap / minerCount) : 0;
+    var bpStr = (bpFraction * 100).toFixed(0) + "% (" + atCap + "/" + minerCount + " miners)";
+    bpEl.textContent = bpStr;
+    bpEl.className = bpFraction >= 0.5 ? "alert" : "";
+
+    if (snap.oldest_entry_age_sec != null) {
+        oldestEl.textContent = fmtDurationSec(snap.oldest_entry_age_sec) +
+            (snap.oldest_job_id ? " (" + short(snap.oldest_job_id, 20) + ")" : "");
+    } else {
+        oldestEl.textContent = "--";
+    }
+
+    var snapAge = snap.snapshot_unix ? Math.max(0, nowUnix - snap.snapshot_unix) : null;
+    snapAgeEl.textContent = snapAge != null ? fmtDurationSec(snapAge) + " ago (id=" + (snap.snapshot_id || 0) + ")" : "--";
+    metaLineEl.textContent = "id=" + (snap.snapshot_id || 0);
+
+    // Per-miner inflight bars.
+    var hotkeys = Object.keys(byHotkey).sort(function(a, b) { return byHotkey[b] - byHotkey[a]; });
+    if (!hotkeys.length) {
+        barsEl.innerHTML = '<div class="queue-bar"><span class="queue-bar-id">--</span><span class="queue-bar-num">no entries</span></div>';
+    } else {
+        barsEl.innerHTML = hotkeys.map(function(hk) {
+            var d = Number(byHotkey[hk]);
+            var pct = (cap > 0) ? Math.min(100, (d / cap) * 100) : Math.min(100, d * 10);
+            var isAtCap = (cap > 0 && d >= cap);
+            return '<div class="queue-bar' + (isAtCap ? ' at-cap' : '') + '" title="' + esc(hk) + '">' +
+                '<span class="queue-bar-id"><code>' + esc(short(hk, 12)) + '</code></span>' +
+                '<span class="queue-bar-track"><span class="queue-bar-fill" style="width:' + pct.toFixed(0) + '%"></span></span>' +
+                '<span class="queue-bar-num">' + d + (cap > 0 ? "/" + cap : "") + '</span>' +
+                '</div>';
+        }).join("");
+    }
+
+    renderQueueSpark(snap, nowUnix);
+}
+
+function renderQueueSpark(snap, nowUnix) {
+    var svg = document.getElementById("queue-spark");
+    var ymaxEl = document.getElementById("queue-spark-y-max");
+    var hist = snap.history || [];
+    if (!hist.length) {
+        svg.innerHTML = '<text class="queue-empty" x="500" y="40" text-anchor="middle">Queue depth history will appear within ~1 minute</text>';
+        ymaxEl.textContent = "";
+        return;
+    }
+    var W = 1000, H = 80, PAD = 6;
+    var INNER_H = H - PAD * 2;
+    var WINDOW_SEC = 30 * 60;
+    var startUnix = nowUnix - WINDOW_SEC;
+    var maxDepth = 0;
+    for (var i = 0; i < hist.length; i++) {
+        if (hist[i].depth_total > maxDepth) maxDepth = hist[i].depth_total;
+    }
+    if (maxDepth <= 0) maxDepth = 1;
+    function xFor(ts) { return ((ts - startUnix) / WINDOW_SEC) * W; }
+    function yFor(d) { return PAD + INNER_H - (d / maxDepth) * INNER_H; }
+    var pts = hist.map(function(p) { return xFor(p.ts).toFixed(2) + "," + yFor(p.depth_total).toFixed(2); });
+    var lineStr = pts.join(" ");
+    var areaStr = "0," + (H - PAD) + " " + lineStr + " " + W + "," + (H - PAD);
+    svg.innerHTML =
+        '<polygon class="queue-spark-area" points="' + areaStr + '"/>' +
+        '<line class="queue-spark-baseline" x1="0" x2="' + W + '" y1="' + (H - PAD) + '" y2="' + (H - PAD) + '"/>' +
+        '<polyline class="queue-spark-line" points="' + lineStr + '"/>';
+    ymaxEl.textContent = "MAX " + maxDepth;
 }
 
 function renderHero() {
@@ -806,7 +1189,7 @@ function renderCompute() {
     renderGraphTabs();
     var svg = document.getElementById("compute-chart");
     if (!svg) return;
-    var jobs = (state.snapshot && state.snapshot.jobs) || [];
+    var jobs = completedJobs();
     var meta = (state.snapshot && state.snapshot.meta) || {};
     var nowUnix = Number(meta.generated_unix) || (Date.now() / 1000);
     var metric = graphMetricDef();
@@ -943,8 +1326,10 @@ function attachComputeHover() {
 function renderAll() {
     if (!state.snapshot) return;
     renderHero();
+    renderQueue();
     renderCompute();
     renderMiners();
+    renderOutstandingJobs();
     renderJobs();
 }
 

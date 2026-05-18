@@ -25,6 +25,7 @@ if [ -z "$RUN_ID" ]; then
     echo "RUN_ID is empty; set it or write /tmp/teuton_sn3_run_id" >&2
     exit 2
 fi
+export TEUTON_RUN_ID="$RUN_ID"
 
 export TEUTON_NETUID="${TEUTON_NETUID:-3}"
 export VALIDATOR_WALLET_NAME="${VALIDATOR_WALLET_NAME:-teutonic}"
@@ -61,10 +62,10 @@ doppler run --project arbos --config dev -- bash -lc '
            AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY \
            TEUTON_OWNER_HOTKEY TEUTON_ASSIGNMENT_CRYPTO \
            TEUTON_AUDIT_ELIGIBLE_HOTKEYS \
-           TEUTON_NETUID RUN_ID \
+           TEUTON_NETUID RUN_ID TEUTON_RUN_ID \
            VALIDATOR_WALLET_NAME VALIDATOR_HOTKEY_NAME VALIDATOR_HOTKEY_SS58 \
            AUDIT_MODE AUDIT_SAMPLE_RATE AUDIT_MAX_JOBS AUDIT_JOBS_SLEEP_SEC \
-           TEUTON_LOOP_SLEEP_SEC ORCHESTRATOR_STEPS ORCHESTRATOR_TIMEOUT_SEC
+           TEUTON_LOOP_SLEEP_SEC TEUTON_GRANT_TTL_SEC ORCHESTRATOR_STEPS ORCHESTRATOR_TIMEOUT_SEC
 
     case "'"$ACTION"'" in
         up)    docker compose -f docker/compose.validator.yml pull

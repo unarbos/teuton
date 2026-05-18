@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from typing import Callable
 
 from teuton_core.protocol import MinerIdentity, ResourceRequirements, WorkerIdentity
 
@@ -10,6 +11,12 @@ from teuton_core.protocol import MinerIdentity, ResourceRequirements, WorkerIden
 # `StreamingRunManager` now releases quota in `wait_epoch` once an emitted
 # job's terminal output exists on the bucket. Default back to the protocol
 # value (5.0). Operators can still widen via TEUTON_BASE_QUOTA if needed.
+#
+# With the queue-based design, per-hotkey queue depth is the authoritative
+# backpressure signal; ``QuotaBook`` is retained for ``pick_worker``
+# priority math (load-balance across accounts by inflight count). The
+# default base quota is intentionally low so ``available_quota`` does not
+# pre-emptively exclude accounts before queue-depth has a chance to.
 _DEFAULT_BASE_QUOTA = float(os.environ.get("TEUTON_BASE_QUOTA", "5.0"))
 
 
@@ -45,10 +52,27 @@ class QuotaBook:
             )
             account.workers[worker.worker_id] = worker
 
-    def pick_worker(self, *, estimated_cu: float = 1.0, requirements: ResourceRequirements | None = None) -> WorkerIdentity:
+    def pick_worker(
+        self,
+        *,
+        estimated_cu: float = 1.0,
+        requirements: ResourceRequirements | None = None,
+        hotkey_filter: Callable[[str], bool] | None = None,
+    ) -> WorkerIdentity:
+        """Pick the highest-priority eligible worker.
+
+        ``hotkey_filter`` is the queue-depth backpressure hook: the
+        orchestrator passes ``lambda hk: queue.depth(hk) < max_inflight``
+        so accounts whose miner already has a full queue are skipped before
+        priority math runs. Without a filter, the legacy QuotaBook quota
+        controls eligibility (used by tests and the non-streaming run
+        manager).
+        """
         requirements = requirements or ResourceRequirements()
         candidates: list[tuple[float, WorkerIdentity, MinerAccount]] = []
         for account in self.accounts.values():
+            if hotkey_filter is not None and not hotkey_filter(account.identity.hotkey_ss58):
+                continue
             if account.available_quota < estimated_cu or not account.workers:
                 continue
             priority = account.trust_multiplier * (1.0 + len(account.workers)) / max(1.0, account.inflight_cu)

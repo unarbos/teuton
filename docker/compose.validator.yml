@@ -102,6 +102,7 @@ services:
       - --s3-bucket=${S3_BUCKET}
       - --s3-region=${S3_REGION:-us-east-1}
       - --grant-mode=presigned
+      - --grant-ttl-sec=${TEUTON_GRANT_TTL_SEC:-86400}
       # Audit-eligible hotkeys are on-chain miner hotkeys, so the ed25519
       # sealed-grant path resolves them via the metagraph just like training
       # jobs. No more dev (HMAC) escape hatch.

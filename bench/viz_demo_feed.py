@@ -146,20 +146,34 @@ def refresh_heartbeats(s3, bucket: str, run_id: str, now: int, session: str) -> 
 
 
 def append_index(s3, bucket: str, run_id: str, new_ids: list[str]) -> list[str]:
-    key = paths.job_index_key(NETUID, run_id)
-    current: list[str] = []
-    try:
-        obj = s3.get_object(Bucket=bucket, Key=key)
-        current = list(json.loads(obj["Body"].read()))
-    except Exception:
-        pass
-    seen = set(current)
-    for jid in new_ids:
-        if jid not in seen:
-            current.append(jid)
-            seen.add(jid)
-    put_json(s3, bucket, key, current)
-    return current
+    """Maintain the demo run's queue.json with the supplied job ids.
+
+    The visualizer demo runs a synthetic feed without an orchestrator, so it
+    has to maintain its own queue snapshot. We write a minimal compatible
+    ``queue/train.json`` body containing the entries the demo just emitted.
+    """
+    key = paths.queue_key(NETUID, run_id, "train")
+    body = {
+        "version": 1,
+        "role": "train",
+        "snapshot_unix": int(time.time()),
+        "snapshot_id": int(time.time()),
+        "outstanding": [
+            {
+                "job_id": jid,
+                "assigned_hotkey": "demo-hotkey",
+                "assigned_worker": None,
+                "manifest_uri": s3_uri(bucket, paths.job_manifest_key(NETUID, run_id, jid)),
+                "grant_uri": None,
+                "deadline_unix": int(time.time()) + 600,
+                "attempt": 0,
+                "created_unix": int(time.time()),
+            }
+            for jid in new_ids
+        ],
+    }
+    put_json(s3, bucket, key, body)
+    return new_ids
 
 
 def fake_sha(salt: str) -> str:

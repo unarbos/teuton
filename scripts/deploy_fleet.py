@@ -126,14 +126,9 @@ def scp_inline(host_cfg: dict, content: str, remote: str, *, chmod: str | None =
 
 
 def render_dotenv(env: dict[str, str], run_id: str | None, extras: dict[str, str]) -> str:
-    # NOTE: RUN_ID is intentionally NOT written here. Each image carries a
-    # `TEUTON_BAKED_RUN_ID` ARG that the entrypoint resolves; that's the source
-    # of truth so a single `scripts/build_push.sh --run-id X` flips the whole
-    # fleet on the next Watchtower pull without re-scp'ing .env files.
-    # Callers that need a host-pinned override can write `RUN_ID=` themselves
-    # after this function returns (rare; usually for one-off debugging only).
     base = {
         "DOCKER_USER": env["DOCKER_USER"],
+        "TEUTON_RUN_ID": run_id or env.get("TEUTON_RUN_ID", ""),
         "S3_BUCKET": env["S3_BUCKET"],
         "S3_REGION": env["S3_REGION"],
         "S3_ENDPOINT_URL": env.get("S3_ENDPOINT_URL", ""),

@@ -68,7 +68,7 @@ services:
       - --grant-mode=presigned
       - --assignment-crypto=ed25519
       - --discovery-backend=bucket
-      - --poll-interval=0.5
+      - --poll-interval=0.05
       - --s3-bucket=${S3_BUCKET}
       - --s3-region=${S3_REGION:-us-east-1}
       - --audit-eligible-hotkeys=${TEUTON_AUDIT_ELIGIBLE_HOTKEYS:-}
@@ -91,7 +91,7 @@ services:
       - --grant-mode=presigned
       - --assignment-crypto=ed25519
       - --discovery-backend=bucket
-      - --poll-interval=0.5
+      - --poll-interval=0.05
       - --s3-bucket=${S3_BUCKET}
       - --s3-region=${S3_REGION:-us-east-1}
       - --audit-eligible-hotkeys=${TEUTON_AUDIT_ELIGIBLE_HOTKEYS:-}
@@ -114,7 +114,7 @@ services:
       - --grant-mode=presigned
       - --assignment-crypto=ed25519
       - --discovery-backend=bucket
-      - --poll-interval=0.5
+      - --poll-interval=0.05
       - --s3-bucket=${S3_BUCKET}
       - --s3-region=${S3_REGION:-us-east-1}
       - --audit-eligible-hotkeys=${TEUTON_AUDIT_ELIGIBLE_HOTKEYS:-}
@@ -137,7 +137,7 @@ services:
       - --grant-mode=presigned
       - --assignment-crypto=ed25519
       - --discovery-backend=bucket
-      - --poll-interval=0.5
+      - --poll-interval=0.05
       - --s3-bucket=${S3_BUCKET}
       - --s3-region=${S3_REGION:-us-east-1}
       - --audit-eligible-hotkeys=${TEUTON_AUDIT_ELIGIBLE_HOTKEYS:-}
@@ -160,7 +160,7 @@ services:
       - --grant-mode=presigned
       - --assignment-crypto=ed25519
       - --discovery-backend=bucket
-      - --poll-interval=0.5
+      - --poll-interval=0.05
       - --s3-bucket=${S3_BUCKET}
       - --s3-region=${S3_REGION:-us-east-1}
       - --audit-eligible-hotkeys=${TEUTON_AUDIT_ELIGIBLE_HOTKEYS:-}
@@ -183,7 +183,7 @@ services:
       - --grant-mode=presigned
       - --assignment-crypto=ed25519
       - --discovery-backend=bucket
-      - --poll-interval=0.5
+      - --poll-interval=0.05
       - --s3-bucket=${S3_BUCKET}
       - --s3-region=${S3_REGION:-us-east-1}
       - --audit-eligible-hotkeys=${TEUTON_AUDIT_ELIGIBLE_HOTKEYS:-}
@@ -206,7 +206,7 @@ services:
       - --grant-mode=presigned
       - --assignment-crypto=ed25519
       - --discovery-backend=bucket
-      - --poll-interval=0.5
+      - --poll-interval=0.05
       - --s3-bucket=${S3_BUCKET}
       - --s3-region=${S3_REGION:-us-east-1}
       - --audit-eligible-hotkeys=${TEUTON_AUDIT_ELIGIBLE_HOTKEYS:-}
@@ -229,7 +229,7 @@ services:
       - --grant-mode=presigned
       - --assignment-crypto=ed25519
       - --discovery-backend=bucket
-      - --poll-interval=0.5
+      - --poll-interval=0.05
       - --s3-bucket=${S3_BUCKET}
       - --s3-region=${S3_REGION:-us-east-1}
       - --audit-eligible-hotkeys=${TEUTON_AUDIT_ELIGIBLE_HOTKEYS:-}

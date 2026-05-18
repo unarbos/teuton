@@ -12,6 +12,15 @@ from typing import Protocol
 _S3_RE = re.compile(r"^s3://([^/]+)/(.+)$")
 
 
+class PreconditionFailed(Exception):
+    """Raised when a conditional write (If-Match / If-None-Match) fails.
+
+    Used by the orchestrator queue to detect concurrent writers to the same
+    queue object: the caller can retry with a fresh read or surface the
+    conflict.
+    """
+
+
 def parse_uri(uri: str) -> tuple[str, str]:
     match = _S3_RE.match(uri)
     if not match:
@@ -97,11 +106,69 @@ class LocalBucket:
         out.sort()
         return out
 
+    def list_with_meta(self, prefix_uri: str) -> list[tuple[str, int, int]]:
+        """Like :meth:`list` but returns ``(uri, mtime_unix, size_bytes)``.
+
+        Mirrors :meth:`S3Bucket.list_with_meta` so callers can swap backends
+        without changing receipt-scan logic.
+        """
+        out: list[tuple[str, int, int]] = []
+        for uri in self.list(prefix_uri):
+            try:
+                stat = os.stat(self._path_for_uri(uri))
+            except FileNotFoundError:
+                continue
+            out.append((uri, int(stat.st_mtime), int(stat.st_size)))
+        return out
+
     def get_json(self, uri: str) -> dict:
         return json.loads(self.get(uri).decode("utf-8"))
 
     def put_json(self, uri: str, value: dict | list) -> None:
         self.put(uri, json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8"))
+
+    def get_with_etag(self, uri: str, *, if_none_match: str | None = None) -> tuple[bytes | None, str | None]:
+        """Read ``uri`` returning ``(body, etag)``.
+
+        - Returns ``(None, etag)`` when ``if_none_match`` matches the current
+          etag (mirrors S3's 304 semantics for ``GetObject``).
+        - Returns ``(None, None)`` when the object is missing.
+        - The etag for ``LocalBucket`` is ``"{mtime_ns}-{size}"``; opaque to
+          callers but stable while the file is unchanged.
+        """
+        path = self._path_for_uri(uri)
+        try:
+            stat = os.stat(path)
+        except FileNotFoundError:
+            return None, None
+        etag = f"{stat.st_mtime_ns}-{stat.st_size}"
+        if if_none_match is not None and if_none_match == etag:
+            return None, etag
+        with open(path, "rb") as f:
+            return f.read(), etag
+
+    def put_with_etag(self, uri: str, data: bytes, *, if_match: str | None = None) -> str:
+        """Write ``uri`` and return the new etag.
+
+        When ``if_match`` is provided, raises :class:`PreconditionFailed` if
+        the on-disk etag differs (object was modified by another writer).
+        ``if_match=""`` means "object must not exist" (matches S3's
+        ``If-None-Match: *`` semantics for create-if-absent).
+        """
+        path = self._path_for_uri(uri)
+        if if_match is not None:
+            try:
+                stat = os.stat(path)
+                current_etag = f"{stat.st_mtime_ns}-{stat.st_size}"
+            except FileNotFoundError:
+                current_etag = ""
+            if if_match != current_etag:
+                raise PreconditionFailed(
+                    f"etag mismatch for {uri}: expected={if_match!r} actual={current_etag!r}"
+                )
+        self.put(uri, data)
+        stat = os.stat(path)
+        return f"{stat.st_mtime_ns}-{stat.st_size}"
 
     def ensure_bucket(self) -> None:
         os.makedirs(os.path.join(self.root, self.bucket), exist_ok=True)
@@ -169,6 +236,16 @@ class S3Bucket:
         status = err.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
         return code in ("NoSuchKey", "NotFound", "404") or status == 404
 
+    @staticmethod
+    def _is_not_visible(err) -> bool:
+        from botocore.exceptions import ClientError
+
+        if not isinstance(err, ClientError):
+            return False
+        code = err.response.get("Error", {}).get("Code", "")
+        status = err.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+        return S3Bucket._is_404(err) or code in ("AccessDenied", "403") or status == 403
+
     def put(self, uri: str, data: bytes) -> None:
         bucket, key = parse_uri(uri)
         self._client.put_object(Bucket=bucket, Key=key, Body=data, ServerSideEncryption="AES256")
@@ -193,7 +270,7 @@ class S3Bucket:
             self._client.head_object(Bucket=bucket, Key=key)
             return True
         except ClientError as e:
-            if self._is_404(e):
+            if self._is_not_visible(e):
                 return False
             raise
 
@@ -231,11 +308,90 @@ class S3Bucket:
         out.sort()
         return out
 
+    def list_with_meta(self, prefix_uri: str) -> list[tuple[str, int, int]]:
+        """Like :meth:`list` but returns ``(uri, mtime_unix, size_bytes)``.
+
+        ``LastModified`` and ``Size`` come back in the ``ListObjectsV2``
+        response itself, so this is essentially free vs ``list`` followed by
+        a HEAD per object. Used by ``scan_recent_receipt_job_ids`` to filter
+        by recency without N HEAD calls.
+        """
+        try:
+            bucket, key = parse_uri(prefix_uri)
+        except ValueError:
+            bucket, key = self.bucket, prefix_uri
+        out: list[tuple[str, int, int]] = []
+        paginator = self._client.get_paginator("list_objects_v2")
+        for page in paginator.paginate(Bucket=bucket, Prefix=key):
+            for obj in page.get("Contents", []) or []:
+                out.append((
+                    join_uri(bucket, obj["Key"]),
+                    int(obj["LastModified"].timestamp()),
+                    int(obj["Size"]),
+                ))
+        out.sort()
+        return out
+
     def get_json(self, uri: str) -> dict:
         return json.loads(self.get(uri).decode("utf-8"))
 
     def put_json(self, uri: str, value: dict | list) -> None:
         self.put(uri, json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8"))
+
+    def get_with_etag(self, uri: str, *, if_none_match: str | None = None) -> tuple[bytes | None, str | None]:
+        """Read ``uri`` returning ``(body, etag)``; honours ``If-None-Match``."""
+        bucket, key = parse_uri(uri)
+        from botocore.exceptions import ClientError
+
+        kwargs: dict = {"Bucket": bucket, "Key": key}
+        if if_none_match is not None:
+            kwargs["IfNoneMatch"] = if_none_match
+        try:
+            response = self._client.get_object(**kwargs)
+        except ClientError as e:
+            code = e.response.get("Error", {}).get("Code", "")
+            status = e.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+            if status == 304 or code in ("NotModified", "304"):
+                return None, if_none_match
+            if self._is_404(e):
+                return None, None
+            raise
+        etag = response.get("ETag")
+        body = response["Body"].read()
+        return body, etag
+
+    def put_with_etag(self, uri: str, data: bytes, *, if_match: str | None = None) -> str:
+        """Write ``uri`` and return the new etag.
+
+        S3 supports ``If-Match`` (precondition: object must have this etag)
+        and ``If-None-Match: "*"`` (precondition: object must not exist).
+        We map ``if_match=""`` to ``If-None-Match: "*"`` for the
+        create-if-absent case.
+        """
+        bucket, key = parse_uri(uri)
+        from botocore.exceptions import ClientError
+
+        kwargs: dict = {
+            "Bucket": bucket,
+            "Key": key,
+            "Body": data,
+            "ServerSideEncryption": "AES256",
+        }
+        if if_match is not None:
+            if if_match == "":
+                kwargs["IfNoneMatch"] = "*"
+            else:
+                kwargs["IfMatch"] = if_match
+        try:
+            response = self._client.put_object(**kwargs)
+        except ClientError as e:
+            code = e.response.get("Error", {}).get("Code", "")
+            status = e.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+            if status == 412 or code in ("PreconditionFailed", "412"):
+                raise PreconditionFailed(f"etag mismatch for {uri}: expected={if_match!r}") from e
+            raise
+        etag = response.get("ETag", "")
+        return etag
 
     def ensure_bucket(self) -> None:
         pass
@@ -277,8 +433,11 @@ class ObjectStore(Protocol):
     def exists(self, uri: str) -> bool: ...
     def delete(self, uri: str) -> None: ...
     def list(self, prefix_uri: str) -> list[str]: ...
+    def list_with_meta(self, prefix_uri: str) -> list[tuple[str, int, int]]: ...
     def get_json(self, uri: str) -> dict: ...
     def put_json(self, uri: str, value: dict | list) -> None: ...
+    def get_with_etag(self, uri: str, *, if_none_match: str | None = None) -> tuple[bytes | None, str | None]: ...
+    def put_with_etag(self, uri: str, data: bytes, *, if_match: str | None = None) -> str: ...
 
 
 def open_local_bucket(root: str, bucket: str) -> LocalBucket:

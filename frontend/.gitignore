@@ -1,0 +1,10 @@
+node_modules/
+build/
+.svelte-kit/
+dist/
+.vite/
+.cache/
+.env
+.env.*
+!.env.example
+*.log

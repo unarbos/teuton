@@ -7,7 +7,7 @@ from teuton_miner.worker import MinerWorker, WorkerConfig
 from teuton_orchestrator.run_manager import RunConfig, RunManager
 
 
-def test_round_flow_writes_step_index_and_outputs(local_bucket, run_id, start_miners) -> None:
+def test_round_flow_emits_jobs_through_queue_and_writes_outputs(local_bucket, run_id, start_miners) -> None:
     start_miners(run_id=run_id, count=2)
     manager = RunManager(
         bucket=local_bucket,
@@ -16,10 +16,12 @@ def test_round_flow_writes_step_index_and_outputs(local_bucket, run_id, start_mi
 
     manager.run_loop(timeout_sec=30)
 
-    step_index_uri = local_bucket.uri_for_key(paths.job_step_index_key(0, run_id, 0))
-    jobs = local_bucket.get_json(step_index_uri)
-    assert "step0-eval" in jobs
-    assert len(jobs) == 10
+    # Every emitted job_id should have appeared on the queue at some point;
+    # ``manager.emitted`` keeps the local history. With 2 miners and the mlp
+    # task we expect 10 jobs (1 forward + 6 inner + 2 reduce + 2 outer + ...
+    # the legacy assert was 10).
+    assert "step0-eval" in manager.emitted
+    assert len(manager.emitted) == 10
     assert local_bucket.exists(local_bucket.uri_for_key(paths.weights_key(0, run_id, 1, 0)))
     assert local_bucket.exists(local_bucket.uri_for_key(paths.weights_key(0, run_id, 1, 1)))
 

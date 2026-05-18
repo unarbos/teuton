@@ -1,0 +1,100 @@
+@import 'tailwindcss';
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap');
+@import 'uplot/dist/uPlot.min.css';
+
+/* ----------------------------------------------------------------------
+   Design tokens. Two themes, CSS-var driven so Tailwind utilities can
+   reference them via the configured @theme block below.
+   --------------------------------------------------------------------- */
+
+:root {
+    --paper: 255 255 255;
+    --ink: 0 0 0;
+    --ink-inv: 255 255 255;
+    --ink-muted: 153 153 153;
+    --accent: 0 0 0;
+    --line: rgba(0, 0, 0, 0.15);
+    --line-faint: rgba(0, 0, 0, 0.08);
+    --warn: 200 60 60;
+}
+
+[data-theme='dark'] {
+    --paper: 17 17 17;
+    --ink: 221 221 221;
+    --ink-inv: 17 17 17;
+    --ink-muted: 119 119 119;
+    --accent: 255 255 255;
+    --line: rgba(255, 255, 255, 0.16);
+    --line-faint: rgba(255, 255, 255, 0.08);
+    --warn: 240 100 100;
+}
+
+@theme {
+    --font-sans: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --font-mono: 'Space Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+    --color-paper: rgb(var(--paper));
+    --color-ink: rgb(var(--ink));
+    --color-ink-inv: rgb(var(--ink-inv));
+    --color-ink-muted: rgb(var(--ink-muted));
+    --color-line: var(--line);
+    --color-line-faint: var(--line-faint);
+    --color-warn: rgb(var(--warn));
+}
+
+html,
+body {
+    margin: 0;
+    padding: 0;
+    background: rgb(var(--paper));
+    color: rgb(var(--ink));
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+code,
+.mono {
+    font-family: var(--font-mono);
+}
+
+.dashed {
+    border-style: dashed;
+    border-color: rgb(var(--ink));
+}
+
+.dotted-faint {
+    border-style: dotted;
+    border-color: var(--line-faint);
+}
+
+/* Generic table row hover -- matches the legacy "crosshair" cursor + invert. */
+table.crosshair tbody tr:hover td {
+    background: rgb(var(--ink));
+    color: rgb(var(--ink-inv));
+    cursor: crosshair;
+}
+
+/* uPlot theme overrides so it matches the monospace minimal aesthetic. */
+.uplot {
+    font-family: var(--font-mono);
+    color: rgb(var(--ink));
+}
+.uplot .u-axis {
+    color: rgb(var(--ink-muted));
+}
+.uplot .u-legend {
+    color: rgb(var(--ink-muted));
+}
+
+.scroll-thin::-webkit-scrollbar {
+    width: 4px;
+    height: 4px;
+}
+.scroll-thin::-webkit-scrollbar-thumb {
+    background: rgb(var(--ink));
+}

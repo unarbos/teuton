@@ -3,13 +3,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import tempfile
 import threading
 import time
-import os
+from typing import Any
 
+from teuton_core import cli_jobs, cli_views
 from teuton_core.protocol import ArtifactCryptoPolicy, CryptoMode
-from teuton_core.signatures import NativeEd25519HotkeySigner
+from teuton_core.signatures import Signer, load_wallet_hotkey_signer
 from teuton_miner.neuron import MinerNeuron, MinerNeuronConfig
 from teuton_orchestrator.run_manager import RunConfig, RunManager
 from teuton_orchestrator.streaming import StreamingRunConfig, StreamingRunManager
@@ -62,13 +64,13 @@ def parse_audit_eligible_hotkeys(args) -> list[str]:
     return [s.strip() for s in raw.split(",") if s.strip()]
 
 
-def load_hotkey_signer(args) -> NativeEd25519HotkeySigner | None:
+def load_hotkey_signer(args) -> Signer | None:
     wallet_name = getattr(args, "wallet_name", None)
     hotkey_name = getattr(args, "hotkey_name", None)
     wallet_path = getattr(args, "wallet_path", None) or os.environ.get("BT_WALLET_PATH", "~/.bittensor/wallets")
     if not wallet_name or not hotkey_name:
         return None
-    return NativeEd25519HotkeySigner.from_wallet(
+    return load_wallet_hotkey_signer(
         wallet_path=wallet_path,
         wallet_name=wallet_name,
         hotkey_name=hotkey_name,
@@ -196,6 +198,12 @@ def cmd_orchestrator(args: argparse.Namespace) -> int:
                 network=args.network,
                 discovery_backend=args.discovery_backend,
                 discovery_heartbeat_ttl_sec=discovery_heartbeat_ttl(args),
+                stress_emit=args.stress_emit,
+                stress_emit_interval=args.stress_emit_interval,
+                stress_epoch_base=args.stress_epoch_base,
+                stress_pin_weights_epoch=args.stress_pin_weights_epoch,
+                stress_skip_bootstrap_if_present=not args.stress_force_bootstrap,
+                epoch_timeout_sec=args.epoch_timeout_sec,
             ),
         )
         manager.run_loop(poll_interval=args.poll_interval, timeout_sec=args.timeout_sec)
@@ -378,14 +386,349 @@ def cmd_dashboard_backend(args: argparse.Namespace) -> int:
             refresh_sec=args.refresh_sec,
             heartbeat_ttl_sec=discovery_heartbeat_ttl(args),
             max_jobs=args.max_jobs,
-            max_artifacts=args.max_artifacts,
             bucket_poll_sec=args.bucket_poll_sec,
             chain_poll_sec=args.chain_poll_sec,
             network=args.network,
             open_browser=args.open_browser,
+            max_inflight_per_hotkey=args.max_inflight_per_hotkey,
         ),
     )
     return 0
+
+
+def _resolve_ls_run_id(args: argparse.Namespace) -> str | None:
+    """Translate `--run-id` / `--all-runs` into the value fetch_* expects.
+
+    Defaults to ``$TEUTON_RUN_ID`` if set so the CLI matches the runtime
+    entrypoint's resolution order. Use ``--all-runs`` to force a network-wide
+    view.
+    """
+    if getattr(args, "all_runs", False):
+        return None
+    explicit = (getattr(args, "run_id", "") or "").strip()
+    if explicit:
+        return explicit
+    env = (os.environ.get("TEUTON_RUN_ID") or "").strip()
+    return env or None
+
+
+def cmd_ls_runs(args: argparse.Namespace) -> int:
+    bucket = build_bucket(args)
+    rows = cli_views.fetch_runs(bucket=bucket, netuid=args.netuid)
+    if args.limit and args.limit > 0:
+        rows = rows[: args.limit]
+    if args.json:
+        print(cli_views.to_json(rows))
+        return 0
+    print(cli_views.render_runs_table(rows))
+    return 0
+
+
+def cmd_ls_miners(args: argparse.Namespace) -> int:
+    bucket = build_bucket(args)
+    run_id = _resolve_ls_run_id(args)
+    rows = cli_views.fetch_miners(
+        bucket=bucket,
+        netuid=args.netuid,
+        run_id=run_id,
+        heartbeat_ttl_sec=args.heartbeat_ttl_sec,
+        include_stale=not args.live_only,
+        limit=args.limit if args.limit and args.limit > 0 else None,
+    )
+    if args.json:
+        print(cli_views.to_json(rows))
+        return 0
+    print(cli_views.render_miners_table(rows))
+    return 0
+
+
+def cmd_ls_jobs(args: argparse.Namespace) -> int:
+    bucket = build_bucket(args)
+    run_id = _resolve_ls_run_id(args)
+    if run_id is None:
+        raise SystemExit("error: ls jobs requires --run-id (or $TEUTON_RUN_ID); --all-runs is not supported here")
+    rows = cli_views.fetch_jobs(
+        bucket=bucket,
+        netuid=args.netuid,
+        run_id=run_id,
+        kind=args.kind or None,
+        status=args.status or None,
+        limit=args.limit,
+    )
+    if args.json:
+        print(cli_views.to_json(rows))
+        return 0
+    print(cli_views.render_jobs_table(rows))
+    return 0
+
+
+def cmd_ls_job(args: argparse.Namespace) -> int:
+    bucket = build_bucket(args)
+    run_id = _resolve_ls_run_id(args)
+    if run_id is None:
+        raise SystemExit("error: ls job requires --run-id (or $TEUTON_RUN_ID)")
+    detail = cli_views.fetch_job_detail(
+        bucket=bucket,
+        netuid=args.netuid,
+        run_id=run_id,
+        job_id=args.job_id,
+    )
+    if args.json:
+        print(cli_views.to_json(detail))
+        return 0
+    print(cli_views.render_job_detail(detail))
+    return 0
+
+
+def _maybe_wait_for_receipt(
+    args: argparse.Namespace,
+    *,
+    bucket,
+    netuid: int,
+    run_id: str,
+    hotkey: str,
+    job_id: str,
+) -> tuple[Any, bool]:
+    """Honour the shared ``--wait`` / ``--timeout-sec`` / ``--poll-interval``
+    flag set. Returns ``(receipt_or_none, timed_out)`` so the caller can decide
+    how to render the outcome.
+    """
+    if not getattr(args, "wait", False):
+        return None, False
+    receipt = cli_jobs.wait_for_receipt(
+        bucket=bucket,
+        netuid=netuid,
+        run_id=run_id,
+        hotkey=hotkey,
+        job_id=job_id,
+        timeout_sec=args.timeout_sec,
+        poll_interval=args.poll_interval,
+    )
+    return receipt, receipt is None
+
+
+def cmd_send_job(args: argparse.Namespace) -> int:
+    bucket = build_bucket(args)
+    run_id = (args.run_id or os.environ.get("TEUTON_RUN_ID") or "").strip()
+    if not run_id:
+        raise SystemExit("error: send-job requires --run-id (or $TEUTON_RUN_ID)")
+    owner_signer = load_hotkey_signer(args)
+    try:
+        manifest = cli_jobs.send_pipe_forward_job(
+            bucket=bucket,
+            netuid=args.netuid,
+            run_id=run_id,
+            hotkey=args.hotkey,
+            worker_id=args.worker_id or None,
+            stage=args.stage,
+            mb=args.mb,
+            epoch=args.epoch if args.epoch > 0 else None,
+            owner_secret=args.owner_secret,
+            owner_signer=owner_signer,
+            grant_mode=args.grant_mode,
+            grant_ttl_sec=args.grant_ttl_sec,
+            assignment_crypto=args.assignment_crypto,
+            assignment_secret=args.assignment_secret,
+            network=args.network,
+            heartbeat_ttl_sec=args.heartbeat_ttl_sec,
+        )
+    except LookupError as e:
+        raise SystemExit(f"error: {e}") from e
+    except FileNotFoundError as e:
+        raise SystemExit(f"error: {e}") from e
+
+    receipt, timed_out = _maybe_wait_for_receipt(
+        args,
+        bucket=bucket,
+        netuid=args.netuid,
+        run_id=run_id,
+        hotkey=manifest.assigned_hotkey,
+        job_id=manifest.job_id,
+    )
+    if args.json:
+        result = cli_jobs.SendJobResult(
+            job_id=manifest.job_id,
+            run_id=manifest.run_id,
+            assigned_hotkey=manifest.assigned_hotkey,
+            assigned_worker=manifest.assigned_worker or "",
+            manifest=manifest.to_dict(),
+            receipt=receipt.to_dict() if receipt is not None else None,
+            timed_out=timed_out,
+        )
+        print(cli_views.to_json(result))
+        return 124 if timed_out else 0
+    print(
+        cli_jobs.render_send_job_summary(
+            job_id=manifest.job_id,
+            assigned_hotkey=manifest.assigned_hotkey,
+            assigned_worker=manifest.assigned_worker or "",
+            receipt=receipt,
+            timed_out=timed_out,
+            timeout_sec=args.timeout_sec,
+        )
+    )
+    return 124 if timed_out else 0
+
+
+def cmd_health_check(args: argparse.Namespace) -> int:
+    bucket = build_bucket(args)
+    run_id = (args.run_id or os.environ.get("TEUTON_RUN_ID") or "").strip()
+    if not run_id:
+        raise SystemExit("error: health-check requires --run-id (or $TEUTON_RUN_ID)")
+    owner_signer = load_hotkey_signer(args)
+    hotkeys = [s.strip() for s in (args.hotkeys or "").split(",") if s.strip()] or None
+    total_holder: dict[str, int] = {}
+
+    def _on_done(done: int, total: int, row) -> None:
+        total_holder["t"] = total
+        if not args.quiet:
+            print(
+                f"  [{done}/{total}] {row.hotkey_ss58[:8]}... -> {row.status} "
+                f"({row.time_to_receipt_sec:.1f}s)" if row.time_to_receipt_sec else
+                f"  [{done}/{total}] {row.hotkey_ss58[:8]}... -> {row.status}",
+                flush=True,
+            )
+
+    rows = cli_jobs.health_check(
+        bucket=bucket,
+        netuid=args.netuid,
+        run_id=run_id,
+        hotkeys=hotkeys,
+        owner_secret=args.owner_secret,
+        owner_signer=owner_signer,
+        grant_mode=args.grant_mode,
+        grant_ttl_sec=args.grant_ttl_sec,
+        assignment_crypto=args.assignment_crypto,
+        assignment_secret=args.assignment_secret,
+        network=args.network,
+        heartbeat_ttl_sec=args.heartbeat_ttl_sec,
+        per_miner_timeout_sec=args.per_miner_timeout_sec,
+        receipt_poll_interval=args.poll_interval,
+        concurrency=args.concurrent,
+        progress=_on_done,
+    )
+    if args.json:
+        print(cli_views.to_json(rows))
+        return 0
+    print(cli_jobs.render_health_check_table(rows))
+    return 0
+
+
+def cmd_stress_stream(args: argparse.Namespace) -> int:
+    bucket = build_bucket(args)
+    run_id = (args.run_id or os.environ.get("TEUTON_RUN_ID") or "").strip()
+    if not run_id:
+        raise SystemExit("error: stress-stream requires --run-id (or $TEUTON_RUN_ID)")
+    owner_signer = load_hotkey_signer(args)
+    hotkeys = [s.strip() for s in (args.hotkeys or "").split(",") if s.strip()]
+    if not hotkeys:
+        from teuton_runtime.discovery import scan_bucket_discovery_records
+        records = scan_bucket_discovery_records(
+            bucket,
+            netuid=args.netuid,
+            run_id=run_id,
+            heartbeat_ttl_sec=60.0,
+        )
+        hotkeys = sorted({r.worker.hotkey_ss58 for r in records})
+        if not hotkeys:
+            raise SystemExit("error: no live miners found; pass --hotkeys explicitly")
+
+    def _progress(kind: str, sample, emitted: int, errored: int) -> None:
+        if args.quiet:
+            return
+        if kind == "emit":
+            note = f"error: {sample.error}" if sample.error else "emitted"
+            print(f"  emit  [{emitted}] {sample.job_id[:30]:<30} -> {sample.hotkey[:8]}... {note}", flush=True)
+        else:
+            lat = sample.latency_sec or 0.0
+            print(f"  recv  {sample.job_id[:30]:<30} latency={lat:.1f}s compute={sample.compute_sec:.3f}s", flush=True)
+
+    report = cli_jobs.stress_stream(
+        bucket=bucket,
+        netuid=args.netuid,
+        run_id=run_id,
+        rate_per_min=args.rate_per_min,
+        duration_sec=args.duration_sec,
+        hotkeys=hotkeys,
+        owner_secret=args.owner_secret,
+        owner_signer=owner_signer,
+        grant_mode=args.grant_mode,
+        grant_ttl_sec=args.grant_ttl_sec,
+        assignment_crypto=args.assignment_crypto,
+        assignment_secret=args.assignment_secret,
+        network=args.network,
+        receipt_timeout_sec=args.receipt_timeout_sec,
+        progress=_progress,
+    )
+    if args.json:
+        print(cli_views.to_json(report))
+        return 0
+    print(cli_jobs.render_stream_report(report))
+    return 0
+
+
+def cmd_submit_manifest(args: argparse.Namespace) -> int:
+    bucket = build_bucket(args)
+    owner_signer = load_hotkey_signer(args)
+    try:
+        manifest = cli_jobs.submit_manifest_file(
+            bucket=bucket,
+            manifest_path=args.manifest,
+            owner_secret=args.owner_secret,
+            owner_signer=owner_signer,
+            grant_mode=args.grant_mode,
+            grant_ttl_sec=args.grant_ttl_sec,
+            assignment_crypto=args.assignment_crypto,
+            assignment_secret=args.assignment_secret,
+            netuid=args.netuid if args.netuid > 0 else None,
+            network=args.network,
+            resign=args.resign,
+        )
+    except (FileNotFoundError, ValueError) as e:
+        raise SystemExit(f"error: {e}") from e
+
+    netuid = args.netuid if args.netuid > 0 else None
+    if netuid is None:
+        # cli_jobs.submit_manifest_file already inferred it; recover the value
+        # from the manifest graph_ref URI for the wait poll.
+        for part in (manifest.graph_ref.uri or "").split("/"):
+            if part.startswith("netuid="):
+                netuid = int(part[len("netuid=") :])
+                break
+    if netuid is None:
+        raise SystemExit("error: could not determine netuid for receipt poll")
+
+    receipt, timed_out = _maybe_wait_for_receipt(
+        args,
+        bucket=bucket,
+        netuid=netuid,
+        run_id=manifest.run_id,
+        hotkey=manifest.assigned_hotkey,
+        job_id=manifest.job_id,
+    )
+    if args.json:
+        result = cli_jobs.SendJobResult(
+            job_id=manifest.job_id,
+            run_id=manifest.run_id,
+            assigned_hotkey=manifest.assigned_hotkey,
+            assigned_worker=manifest.assigned_worker or "",
+            manifest=manifest.to_dict(),
+            receipt=receipt.to_dict() if receipt is not None else None,
+            timed_out=timed_out,
+        )
+        print(cli_views.to_json(result))
+        return 124 if timed_out else 0
+    print(
+        cli_jobs.render_send_job_summary(
+            job_id=manifest.job_id,
+            assigned_hotkey=manifest.assigned_hotkey,
+            assigned_worker=manifest.assigned_worker or "",
+            receipt=receipt,
+            timed_out=timed_out,
+            timeout_sec=args.timeout_sec,
+        )
+    )
+    return 124 if timed_out else 0
 
 
 def add_bucket_args(p: argparse.ArgumentParser) -> None:
@@ -485,6 +828,40 @@ def build_parser() -> argparse.ArgumentParser:
     orch.add_argument("--steps", type=int, default=1)
     orch.add_argument("--poll-interval", type=float, default=0.1)
     orch.add_argument("--timeout-sec", type=float, default=600.0)
+    orch.add_argument(
+        "--stress-emit",
+        action="store_true",
+        help="Continuously emit streaming jobs without waiting for epoch completion; intended for load testing.",
+    )
+    orch.add_argument(
+        "--stress-emit-interval",
+        type=float,
+        default=0.0,
+        help="Optional sleep between stress-emitted epochs.",
+    )
+    orch.add_argument(
+        "--stress-epoch-base",
+        type=int,
+        default=1_000_000,
+        help="Synthetic epoch counter starts here; keeps stress job_ids out of any historical j-e* range.",
+    )
+    orch.add_argument(
+        "--stress-pin-weights-epoch",
+        type=int,
+        default=0,
+        help="Pin every stress job's per-stage weight URI to this epoch (default 0 = bootstrap).",
+    )
+    orch.add_argument(
+        "--stress-force-bootstrap",
+        action="store_true",
+        help="Force task.bootstrap() to run even in stress mode (default: skip when manifest config already present).",
+    )
+    orch.add_argument(
+        "--epoch-timeout-sec",
+        type=float,
+        default=300.0,
+        help="Per-epoch wait deadline so wait_epoch can never silently hang.",
+    )
     orch.add_argument("--network", default="finney")
     orch.add_argument("--owner-secret", default="owner-dev-secret")
     add_wallet_args(orch)
@@ -598,15 +975,273 @@ def build_parser() -> argparse.ArgumentParser:
     dashboard.add_argument("--port", type=int, default=8765)
     dashboard.add_argument("--open-browser", action="store_true")
     dashboard.add_argument("--refresh-sec", type=float, default=3.0)
-    dashboard.add_argument("--max-jobs", type=int, default=500)
-    dashboard.add_argument("--max-artifacts", type=int, default=300)
+    dashboard.add_argument("--max-jobs", type=int, default=int(os.environ.get("TEUTON_DASHBOARD_MAX_JOBS") or "200"))
+    dashboard.add_argument(
+        "--max-inflight-per-hotkey",
+        type=int,
+        default=int(os.environ.get("TEUTON_MAX_INFLIGHT_PER_HOTKEY") or "8"),
+        help="Per-hotkey queue cap used to render the 'at-cap' badge; mirror the orchestrator's value.",
+    )
     dashboard.add_argument("--bucket-poll-sec", type=float, default=float(os.environ.get("TEUTON_DASHBOARD_BUCKET_POLL_SEC") or "5"))
     dashboard.add_argument("--chain-poll-sec", type=float, default=float(os.environ.get("TEUTON_DASHBOARD_CHAIN_POLL_SEC") or "30"))
     dashboard.add_argument("--network", default=os.environ.get("BT_NETWORK", "finney"))
     add_discovery_args(dashboard)
     dashboard.set_defaults(fn=cmd_dashboard_backend)
 
+    ls = sub.add_parser(
+        "ls",
+        help="Read-only views of the live network: runs, miners, jobs (kubectl-style).",
+    )
+    ls_sub = ls.add_subparsers(dest="ls_target", required=True)
+
+    ls_runs = ls_sub.add_parser("runs", help="List runs visible on the bucket for the given netuid.")
+    add_bucket_args(ls_runs)
+    ls_runs.add_argument("--netuid", type=int, default=int(os.environ.get("TEUTON_NETUID", "3")))
+    ls_runs.add_argument("--limit", type=int, default=0, help="Cap rows (0 = no cap).")
+    ls_runs.add_argument("--json", action="store_true", help="Emit JSON instead of a table.")
+    ls_runs.set_defaults(fn=cmd_ls_runs)
+
+    ls_miners = ls_sub.add_parser("miners", help="List heartbeating miners on the network.")
+    add_bucket_args(ls_miners)
+    ls_miners.add_argument("--netuid", type=int, default=int(os.environ.get("TEUTON_NETUID", "3")))
+    ls_miners.add_argument(
+        "--run-id",
+        default="",
+        help="Filter by run_id. Defaults to $TEUTON_RUN_ID. Use --all-runs to span every run.",
+    )
+    ls_miners.add_argument("--all-runs", action="store_true", help="Show miners from every run.")
+    ls_miners.add_argument(
+        "--heartbeat-ttl-sec",
+        type=float,
+        default=30.0,
+        help="A miner is reported as 'live' if its heartbeat is fresher than this.",
+    )
+    ls_miners.add_argument("--live-only", action="store_true", help="Hide stale miners.")
+    ls_miners.add_argument("--limit", type=int, default=0, help="Cap rows (0 = no cap).")
+    ls_miners.add_argument("--json", action="store_true", help="Emit JSON instead of a table.")
+    ls_miners.set_defaults(fn=cmd_ls_miners)
+
+    ls_jobs = ls_sub.add_parser("jobs", help="List recent jobs for a given run.")
+    add_bucket_args(ls_jobs)
+    ls_jobs.add_argument("--netuid", type=int, default=int(os.environ.get("TEUTON_NETUID", "3")))
+    ls_jobs.add_argument(
+        "--run-id",
+        default="",
+        help="Run to inspect. Defaults to $TEUTON_RUN_ID.",
+    )
+    ls_jobs.add_argument(
+        "--all-runs",
+        action="store_true",
+        help="Not supported for ls jobs (errors); included for symmetry with ls miners.",
+    )
+    ls_jobs.add_argument("--kind", default="", help="Filter by job kind (e.g. pipe_forward).")
+    ls_jobs.add_argument(
+        "--status",
+        default="",
+        choices=["", "created", "completed", "verified", "failed", "stale"],
+        help="Filter by job status.",
+    )
+    ls_jobs.add_argument("--limit", type=int, default=50, help="Cap rows (default 50).")
+    ls_jobs.add_argument("--json", action="store_true", help="Emit JSON instead of a table.")
+    ls_jobs.set_defaults(fn=cmd_ls_jobs)
+
+    ls_job = ls_sub.add_parser("job", help="Show details for a single job (manifest, receipts, verdicts, audits).")
+    add_bucket_args(ls_job)
+    ls_job.add_argument("--netuid", type=int, default=int(os.environ.get("TEUTON_NETUID", "3")))
+    ls_job.add_argument(
+        "--run-id",
+        default="",
+        help="Run to inspect. Defaults to $TEUTON_RUN_ID.",
+    )
+    ls_job.add_argument("job_id", help="The job_id to inspect.")
+    ls_job.add_argument("--json", action="store_true", help="Emit JSON instead of a formatted block.")
+    ls_job.set_defaults(fn=cmd_ls_job)
+
+    send = sub.add_parser(
+        "send-job",
+        help="Emit one synthetic pipe_forward job pinned to a specific miner hotkey.",
+    )
+    add_bucket_args(send)
+    send.add_argument("--netuid", type=int, default=int(os.environ.get("TEUTON_NETUID", "3")))
+    send.add_argument(
+        "--run-id",
+        default=os.environ.get("TEUTON_RUN_ID", ""),
+        help="Existing run to attach to (must be bootstrapped). Defaults to $TEUTON_RUN_ID.",
+    )
+    send.add_argument("--hotkey", required=True, help="Target miner hotkey (SS58).")
+    send.add_argument(
+        "--worker-id",
+        default="",
+        help="Specific worker_id to pin to. Defaults to the miner's freshest heartbeating worker.",
+    )
+    send.add_argument("--stage", type=int, default=0, help="Pipeline stage to forward.")
+    send.add_argument("--mb", type=int, default=0, help="Microbatch index for the job_id.")
+    send.add_argument(
+        "--epoch",
+        type=int,
+        default=0,
+        help="Synthetic epoch (0 = auto-pick in the 9_000_000+ range so we never collide).",
+    )
+    send.add_argument(
+        "--heartbeat-ttl-sec",
+        type=float,
+        default=120.0,
+        help="Reject the send if the miner's heartbeat is older than this.",
+    )
+    send.add_argument(
+        "--owner-secret",
+        default=os.environ.get("TEUTON_OWNER_SECRET", "owner-dev-secret"),
+        help="Owner secret used to sign the manifest when no --wallet-name is provided.",
+    )
+    send.add_argument("--network", default=os.environ.get("BT_NETWORK", "finney"))
+    add_wallet_args(send)
+    add_grant_args(send)
+    _add_wait_args(send)
+    send.add_argument("--json", action="store_true", help="Emit JSON instead of a human summary.")
+    send.set_defaults(fn=cmd_send_job)
+
+    hc = sub.add_parser(
+        "health-check",
+        help="Send one synthetic pipe_forward to every (or selected) live miner and report per-miner latency.",
+    )
+    add_bucket_args(hc)
+    hc.add_argument("--netuid", type=int, default=int(os.environ.get("TEUTON_NETUID", "3")))
+    hc.add_argument(
+        "--run-id",
+        default=os.environ.get("TEUTON_RUN_ID", ""),
+        help="Existing run to attach to. Defaults to $TEUTON_RUN_ID.",
+    )
+    hc.add_argument(
+        "--hotkeys",
+        default="",
+        help="Comma-separated list of hotkeys to probe. Empty = every live miner on the run.",
+    )
+    hc.add_argument(
+        "--heartbeat-ttl-sec",
+        type=float,
+        default=60.0,
+        help="Only probe miners whose heartbeat is fresher than this.",
+    )
+    hc.add_argument(
+        "--per-miner-timeout-sec",
+        type=float,
+        default=300.0,
+        help="Max time to wait for a single receipt before flagging the miner as 'timeout'.",
+    )
+    hc.add_argument(
+        "--poll-interval",
+        type=float,
+        default=5.0,
+        help="Per-receipt poll interval.",
+    )
+    hc.add_argument(
+        "--concurrent",
+        type=int,
+        default=8,
+        help="Parallel send/wait fanout.",
+    )
+    hc.add_argument(
+        "--owner-secret",
+        default=os.environ.get("TEUTON_OWNER_SECRET", "owner-dev-secret"),
+    )
+    hc.add_argument("--network", default=os.environ.get("BT_NETWORK", "finney"))
+    hc.add_argument("--quiet", action="store_true", help="Suppress per-miner progress lines.")
+    hc.add_argument("--json", action="store_true", help="Emit JSON instead of a table.")
+    add_wallet_args(hc)
+    add_grant_args(hc)
+    hc.set_defaults(fn=cmd_health_check)
+
+    stream = sub.add_parser(
+        "stress-stream",
+        help="Emit jobs at a controlled rate across N miners and report per-job latency.",
+    )
+    add_bucket_args(stream)
+    stream.add_argument("--netuid", type=int, default=int(os.environ.get("TEUTON_NETUID", "3")))
+    stream.add_argument("--run-id", default=os.environ.get("TEUTON_RUN_ID", ""))
+    stream.add_argument(
+        "--rate-per-min",
+        type=float,
+        default=10.0,
+        help="Target jobs per minute (round-robined across --hotkeys).",
+    )
+    stream.add_argument(
+        "--duration-sec",
+        type=float,
+        default=120.0,
+        help="Emit phase length in seconds.",
+    )
+    stream.add_argument(
+        "--receipt-timeout-sec",
+        type=float,
+        default=300.0,
+        help="After emit phase ends, wait this long for pending receipts before declaring stale.",
+    )
+    stream.add_argument(
+        "--hotkeys",
+        default="",
+        help="Comma-separated SS58 hotkeys to target. Empty = every live miner.",
+    )
+    stream.add_argument(
+        "--owner-secret",
+        default=os.environ.get("TEUTON_OWNER_SECRET", "owner-dev-secret"),
+    )
+    stream.add_argument("--network", default=os.environ.get("BT_NETWORK", "finney"))
+    stream.add_argument("--quiet", action="store_true")
+    stream.add_argument("--json", action="store_true")
+    add_wallet_args(stream)
+    add_grant_args(stream)
+    stream.set_defaults(fn=cmd_stress_stream)
+
+    submit = sub.add_parser(
+        "submit-manifest",
+        help="Submit a manifest JSON file as a single job on the network.",
+    )
+    add_bucket_args(submit)
+    submit.add_argument(
+        "--netuid",
+        type=int,
+        default=0,
+        help="netuid for the bucket layout. 0 = infer from the manifest's graph_ref URI.",
+    )
+    submit.add_argument("--manifest", required=True, help="Path to a JobManifestV3 JSON file.")
+    submit.add_argument(
+        "--owner-secret",
+        default=os.environ.get("TEUTON_OWNER_SECRET", ""),
+        help="Re-sign the manifest with this secret if --resign is set.",
+    )
+    submit.add_argument(
+        "--resign",
+        action="store_true",
+        help="Re-sign the manifest before writing (otherwise the existing owner_signature is kept).",
+    )
+    submit.add_argument("--network", default=os.environ.get("BT_NETWORK", "finney"))
+    add_wallet_args(submit)
+    add_grant_args(submit)
+    _add_wait_args(submit)
+    submit.add_argument("--json", action="store_true", help="Emit JSON instead of a human summary.")
+    submit.set_defaults(fn=cmd_submit_manifest)
+
     return p
+
+
+def _add_wait_args(p: argparse.ArgumentParser) -> None:
+    p.add_argument(
+        "--wait",
+        action="store_true",
+        help="Block until the receipt for the emitted job lands on the bucket (or timeout).",
+    )
+    p.add_argument(
+        "--timeout-sec",
+        type=float,
+        default=60.0,
+        help="How long to wait for the receipt when --wait is set.",
+    )
+    p.add_argument(
+        "--poll-interval",
+        type=float,
+        default=1.0,
+        help="Receipt-poll interval (seconds).",
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
